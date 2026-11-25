@@ -17,6 +17,8 @@ import type { InventoryItem } from './InventoryItem';
  */
 export type InteractiveObjectKind =
   | 'note'
+  | 'desk_box'
+  | 'wall_marking'
   | 'switch_panel'
   | 'clue_wall'
   | 'safe'

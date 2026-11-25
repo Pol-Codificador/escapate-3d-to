@@ -212,3 +212,63 @@ Implementar la **Fase 2** completa de **Escápate!!**: construir el sistema de a
    - Hacer clic para capturar el cursor (Pointer Lock) y explorar con `WASD`/flechas verificando colisión con paredes, escritorio, caja fuerte y pedestal.
    - Apuntar al escritorio (`desk_note`), panel (`switch_panel`, teclas `1/2/3` o clic y tecla `Z` para deshacer), pared (`clue_wall`), caja fuerte (`safe`, tecleando el PIN `4829` en Terror o `7391` en Sci-Fi), recoger la llave/tarjeta (`E`) y usarla en la puerta de salida (`E`).
    - Probar el botón superior derecho **Cambiar a Nave Sci-Fi / Mansión de Terror** y la tecla `R` para reiniciar vía Prototype.
+
+---
+
+## Paso #04 — Acertijos Multi-Pista (4 Encadenados), Iluminación/Decoración 3D Rica, Modales Interactivos y HUD Completo (2026-11-24)
+
+### 1. Objetivo del paso
+Ejecutar la **Fase 3** completa de **Escápate!!**: ampliar la progresión del Modelo puro a **4 acertijos encadenados** con pistas repartidas en 3 ubicaciones, reutilizar `ItemUnlockStrategy` en dos contextos (`desk_box` y `exit_door`), extender `SequenceStrategy` a **5 pasos con repeticiones**, enriquecer la escena 3D con iluminación nítida y mobiliario temático detallado, construir la interfaz completa en HTML/CSS puro (**Menú Principal**, **Modales Interactivos**, **HUD** y **Historial de Comandos en vivo**), validar todo con compilación estricta y smoke test funcional, y sincronizar con GitHub.
+
+### 2. Archivos creados o modificados
+
+| Ruta | Clase / Interfaz Principal | Responsabilidad Exacta |
+| --- | --- | --- |
+| `src/model/entities/InteractiveObject.ts` | `InteractiveObjectKind` | Amplía los tipos interactivos con `'desk_box'` y `'wall_marking'`. |
+| `src/model/puzzles/strategies/ItemUnlockStrategy.ts` | `ItemUnlockStrategy` | Expone `getRequiredItemLabel()` para informar en UI qué ítem exige una cerradura sin acoplar reglas. |
+| `src/core/interfaces/IThemeFactory.ts` | `ThemeGameplayCatalog` | Incorpora `deskBoxPuzzle`, `initialItem` y especificaciones textuales de `smallKeyPickup`, `deskBox` y `wallMarking`. |
+| `src/model/factories/HorrorThemeFactory.ts` | `HorrorThemeFactory` | Configura iluminación cálida equilibrada, niebla sutil (`0.02`), `brass_drawer_key`, secuencia de 5 pasos `['B','A','C','B','A']`, 3 pistas y 4 acertijos. |
+| `src/model/factories/SciFiThemeFactory.ts` | `SciFiThemeFactory` | Configura iluminación fría uniforme, niebla sutil (`0.016`), `service_chip`, secuencia de 5 pasos `['C','B','A','C','B']`, 3 pistas y 4 acertijos. |
+| `src/model/builders/RoomDirector.ts` | `RoomDirector` | Orquesta 4 acertijos y 9 objetos interactivos en `10 × 4 × 10` m sin superposiciones, añadiendo el efecto encadenado para `desk_box`. |
+| `src/core/interfaces/ICommand.ts` y `src/controller/commands/CommandInvoker.ts` | `ICommand`, `CommandInvoker`, `CommandHistoryEntry` | Añaden `commandName` explícito para preservar el nombre canónico en producción minificada dentro del log observable. |
+| `src/controller/commands/PickUpItemCommand.ts`, `UseItemCommand.ts`, `InspectObjectCommand.ts`, `ToggleSwitchCommand.ts`, `InputCodeCommand.ts` | Comandos Concretos | Generalizan `PickUpItemCommand` y `UseItemCommand` para `small_key_pickup`/`desk_box` y `reward_item_pickup`/`exit_door`, e integran respuestas de lectura y cerradura en `InspectObjectCommand`. |
+| `src/controller/GameController.ts` | `GameController` | Coordina apertura de `desk_box` con lectura inmediata, apertura de modales en `switch_panel`/`safe`, menú principal, linterna (`F`), audio (`M`) e inventario (`1-5`). |
+| `src/view/builders3d/ProceduralTextureFactory.ts` | `ProceduralTextureFactory` | Añade `CanvasTexture` para nota arrancada de `desk_box`, inscripción `wall_marking`, alfombra victoriana / plataforma núcleo, ventanal nocturno / espacial y cuadros técnicos/retratos. |
+| `src/view/builders3d/RoomMeshFactory.ts` | `RoomMeshFactory`, `BuiltRoomSceneAssets` | Modela `desk_box` hueco con tapa pivotante, `small_key_pickup`, `wall_marking`, candelabro/tiras LED, estantería/estación de carga, ventanal, sillón/racks de servidores, baúl/cajas de carga y cables emisivos. |
+| `src/view/scene/SceneManager.ts` | `SceneManager` | Eleva exposición e iluminación base + luces locales por sector, anima apertura de `desk_box`, 5 LEDs de progreso en `switch_panel`, flotación de múltiples ítems y control de linterna (`toggleFlashlight()`). |
+| `src/view/ui/MainMenuView.ts` | `MainMenuView` | Pantalla de inicio académica con tarjetas temáticas, guía de controles y vista previa 3D reactiva (`IObserver<GameStateSnapshot>`). |
+| `src/view/ui/ModalView.ts` | `ModalView` | Modales en primer plano (Lectura temática, Panel de 5 Palancas con `undo`, Teclado numérico 4 dígitos y Victoria/Derrota) con liberación/recuperación automática de Pointer Lock. |
+| `src/view/ui/HudView.ts` | `HudView` | HUD completo: reloj `MM:SS` crítico pulsante, progreso `X / 4`, botones de acción, mira central, inventario de 5 ranuras SVG y notificaciones *toast*. |
+| `src/view/ui/CommandLogView.ts` | `CommandLogView` | Panel lateral desplegable (`H`) que observa a `CommandInvoker` y lista cada comando con hora y estado (`Ejecutado`, `Reversible`, `Deshecho`). |
+| `index.html`, `src/style.css`, `src/main.ts` | Punto de entrada completo | Elimina los controles provisionales de Fase 2 y conecta el menú, escena 3D, controlador y las 4 vistas UI observadoras. |
+| `README.md`, `docs/ARCHITECTURE.md`, `docs/DEVLOG_DETALLADO.md` | Documentación oficial | Actualiza controles, flujo de 4 acertijos, diagramas UML Mermaid con las vistas UI y registra este Paso #04. |
+
+### 3. Análisis de Patrones de Diseño
+
+1. **Reutilización de Strategy (`ItemUnlockStrategy` y `SequenceStrategy` de 5 pasos):**
+   - *Por qué se eligió:* `ItemUnlockStrategy` se reutilizó sin duplicar código ni crear subclases nuevas para validar tanto el cofre/compartimento (`desk_box_puzzle`) como la puerta final (`exit_puzzle`). A su vez, `SequenceStrategy` soportó secuencias de 5 pasos con repeticiones (`B→A→C→B→A` y `C→B→A→C→B`) conservando `popStep()` para `Command.undo()`.
+2. **Command + Observer (`CommandInvoker` $\rightarrow$ `CommandLogView`, `HudView`, `ModalView`):**
+   - *Por qué se eligió:* Al añadir `commandName` explícito y generalizar `UseItemCommand` sobre `targetObjectId`, todas las interacciones (incluido abrir el cofre del escritorio, leer la pared sur, deshacer pasos de secuencia o revertir recolección de la llave pequeña) quedan auditadas en tiempo real en `CommandLogView` sin acoplar el Controlador a la UI.
+3. **MVC Estricto en Vistas HTML/CSS (`MainMenuView`, `ModalView`, `HudView`, `CommandLogView`):**
+   - *Por qué se eligió:* Ninguna vista UI importa ni modifica directamente entidades de `src/model/`: solo implementan `IObserver<T>` para renderizar instantáneas y delegan cada clic o atajo de teclado en `GameController`.
+4. **Abstract Factory + Builder + Prototype (`HorrorThemeFactory`, `SciFiThemeFactory`, `RoomDirector`, `Room.clone()`):**
+   - *Por qué se eligió:* Toda la ampliación a 4 acertijos, 9 objetos, iluminación y narrativa se mantuvo encapsulada en las fábricas y el director; `GameManager.restartGame()` continúa reiniciando la sala completa mediante clonación profunda `Prototype`.
+
+### 4. Flujo técnico / Cómo interactúan las piezas
+
+1. Al iniciar la aplicación, `MainMenuView` se muestra sobre una vista previa 3D del cuarto elegible (`horror` o `scifi`). Al pulsar **Entrar a la Sala**, `GameController.startNewGame(theme)` construye la sala, suscribe las vistas UI y activa Pointer Lock.
+2. El jugador inspecciona `desk_note` (Pista #1: pasos 1–2 y paradero de `small_key_pickup`), recoge la llave pequeña/chip de la estantería/estación noroeste y la usa con `UseItemCommand` sobre `desk_box` (Acertijo 1), abriendo la tapa en 3D y leyendo la Pista #2 (pasos 3–4).
+3. En el muro sur examina `wall_marking` (Pista #3: paso 5) y luego abre el modal de `switch_panel`, donde ingresa los 5 pasos (con soporte de `Z` / `Deshacer paso`) para resolver el Acertijo 2, energizar `clue_wall` y revelar el PIN (`4829` o `7391`).
+4. Con el teclado modal de `safe` resuelve el Acertijo 3, recogiendo `bronze_key` o `access_card_lv5` del pedestal para abrir `exit_door` (Acertijo 4). `ExitDoor` y `Room` notifican la victoria a `GameManager`, que abre el modal final en `ModalView` con opciones de reinicio `Prototype` o cambio de temática.
+
+### 5. Cómo probar o verificar este paso
+
+1. Verificar tipado estricto y empaquetado de producción:
+   ```bash
+   npx tsc --noEmit
+   npm run build
+   ```
+   Ambos deben finalizar con código `0`.
+2. Auditar la frontera MVC comprobando `0` referencias ejecutables a `three`, `document`, `window`, `HTMLElement`, `AudioContext` o `setInterval` dentro de `src/model/` y `src/core/interfaces/`.
+3. Ejecutar el smoke test funcional (4 acertijos encadenados, secuencia de 5 pasos con repeticiones, `undo()` de recolección y secuencia, y clonación `Prototype`) verificando ambas temáticas (`horror` y `scifi`).
+4. Abrir `npm run dev` en el navegador y recorrer el juego completo desde el Menú Principal verificando iluminación nítida, decoración 3D, apertura animada de `desk_box`, modales interactivos, Pointer Lock, inventario SVG, historial lateral (`H`), linterna (`F`) y reinicio `Prototype` (`R`).

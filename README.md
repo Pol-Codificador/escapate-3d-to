@@ -44,15 +44,19 @@ npm run build
 
 ---
 
-## Controles Previstos (Modo Primera Persona)
+## Controles (Modo Primera Persona)
 
 | Entrada | Acción |
 | --- | --- |
-| `W` `A` `S` `D` | Desplazamiento libre en primera persona con colisiones |
+| `W` `A` `S` `D` / Flechas | Desplazamiento libre en primera persona con colisiones AABB |
 | `Ratón` (Pointer Lock) | Rotación de cámara y apuntado con mira central |
-| `Click izquierdo` / `E` | Interactuar con el objeto apuntado (inspeccionar, recoger, accionar) |
+| `Click izquierdo` / `E` | Interactuar con el objeto apuntado (leer pista, recoger, abrir modal o usar ítem) |
 | `1` – `5` | Seleccionar ranura rápida del inventario |
 | `Z` | Deshacer última acción reversible (`Command.undo()`) |
+| `F` | Encender / apagar linterna de mano |
+| `H` | Mostrar / ocultar historial de comandos en vivo |
+| `M` | Silenciar / activar audio procedural |
+| `R` | Reiniciar sala mediante clonación `Prototype` |
 | `ESC` | Liberar puntero / cerrar modal activo |
 
 ---
@@ -63,12 +67,12 @@ El sistema aplica **MVC estricto**: `src/model/` y `src/core/interfaces/` tienen
 
 | Categoría | Patrón | Rol / Clases | Ubicación |
 | --- | --- | --- | --- |
-| Arquitectónico | **MVC** | Separación estricta Model / View / Controller | `src/model/`, `src/view/`, `src/controller/` |
-| Comportamental | **Observer** | `IObserver<T>`, `ISubject<T>` (`GameTimer`, `Inventory`, `Puzzle`, `Room`, `GameManager` $\rightarrow$ `ExitDoor`, `AudioManager`, HUD/Vista) | `src/core/interfaces/IObserver.ts`, `src/model/`, `src/core/singletons/` |
-| Comportamental | **Strategy** | `IPuzzleValidationStrategy` (`SequenceStrategy`, `PinCodeStrategy`, `ItemUnlockStrategy`) + Contexto `Puzzle` | `src/core/interfaces/IPuzzleValidationStrategy.ts`, `src/model/puzzles/` |
-| Comportamental | **Command** | `ICommand` (contrato listo; comandos concretos en Fase 2) | `src/core/interfaces/ICommand.ts`, `src/controller/commands/` |
+| Arquitectónico | **MVC** | Separación estricta Model (`src/model/`) / View (`SceneManager`, `MainMenuView`, `ModalView`, `HudView`, `CommandLogView`) / Controller (`GameController`) | `src/model/`, `src/view/`, `src/controller/` |
+| Comportamental | **Observer** | `IObserver<T>`, `ISubject<T>` (`GameTimer`, `Inventory`, `Puzzle`, `Room`, `GameManager`, `CommandInvoker` $\rightarrow$ `ExitDoor`, `AudioManager`, `SceneManager`, Vistas UI) | `src/core/interfaces/IObserver.ts`, `src/model/`, `src/core/singletons/`, `src/view/ui/` |
+| Comportamental | **Strategy** | `IPuzzleValidationStrategy` (`SequenceStrategy` 5 pasos, `PinCodeStrategy`, `ItemUnlockStrategy` reutilizada en cofre y salida) + Contexto `Puzzle` | `src/core/interfaces/IPuzzleValidationStrategy.ts`, `src/model/puzzles/` |
+| Comportamental | **Command** | `ICommand`, `CommandInvoker` + `InspectObjectCommand`, `ToggleSwitchCommand`, `InputCodeCommand`, `PickUpItemCommand`, `UseItemCommand` | `src/core/interfaces/ICommand.ts`, `src/controller/commands/` |
 | Creacional | **Abstract Factory** | `IThemeFactory` (`HorrorThemeFactory`, `SciFiThemeFactory`) | `src/core/interfaces/IThemeFactory.ts`, `src/model/factories/` |
-| Creacional | **Builder** | `RoomBuilder`, `RoomDirector`, producto `Room` | `src/model/builders/`, `src/model/entities/Room.ts` |
+| Creacional | **Builder** | `RoomBuilder`, `RoomDirector`, producto `Room` (9 objetos, 4 acertijos) | `src/model/builders/`, `src/model/entities/Room.ts` |
 | Creacional | **Prototype** | `IPrototype<T>` (`Room`, `Puzzle`, `InteractiveObject`, `ExitDoor`, `Inventory`, `InventoryItem`, estrategias) | `src/core/interfaces/IPrototype.ts`, `src/model/` |
 | Creacional | **Singleton** | `GameManager`, `AudioManager` | `src/core/singletons/` |
 

@@ -50,6 +50,13 @@ export class ItemUnlockStrategy
   }
 
   /**
+   * Devuelve la etiqueta legible del ítem necesario para mensajes de pista en pantalla.
+   */
+  public getRequiredItemLabel(): string {
+    return this.requiredItemLabel;
+  }
+
+  /**
    * Evalúa si el `itemId` proporcionado coincide con el ítem requerido.
    *
    * @param input - Identificador del ítem seleccionado por el jugador.

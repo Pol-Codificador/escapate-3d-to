@@ -16,6 +16,8 @@ import type { UndoableCommand } from './CommandInvoker';
  * Comando concreto para validar una combinación de 4 dígitos en `PinCodeStrategy`.
  */
 export class InputCodeCommand implements UndoableCommand {
+  public readonly commandName = 'InputCodeCommand';
+
   private readonly puzzle: Puzzle;
   private readonly pinCode: string;
   private readonly room?: Room;

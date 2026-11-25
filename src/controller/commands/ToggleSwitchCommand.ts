@@ -22,6 +22,8 @@ export type SwitchSymbol = 'A' | 'B' | 'C';
  * Comando concreto que agrega un interruptor a `SequenceStrategy` y soporta `undo()`.
  */
 export class ToggleSwitchCommand implements UndoableCommand {
+  public readonly commandName = 'ToggleSwitchCommand';
+
   private readonly puzzle: Puzzle;
   private readonly switchSymbol: string;
 

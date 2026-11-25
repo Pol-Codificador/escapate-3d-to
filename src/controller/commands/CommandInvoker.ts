@@ -31,6 +31,7 @@ export type CommandEventType = 'executed' | 'undone' | 'cleared';
 export interface CommandHistoryEntry {
   readonly id: number;
   readonly command: ICommand;
+  readonly commandName: string;
   readonly description: string;
   readonly timestamp: number;
   readonly formattedTime: string;
@@ -78,6 +79,7 @@ export class CommandInvoker implements ISubject<CommandHistorySnapshot> {
     const entry: CommandHistoryEntry = {
       id: this.nextEntryId,
       command,
+      commandName: command.commandName ?? command.constructor.name,
       description: command.getDescription(),
       timestamp: now,
       formattedTime: this.formatTimestamp(now),

@@ -1,113 +1,160 @@
 import './style.css';
 import { GameController, type HoverTargetInfo } from './controller/GameController';
 import type { ThemeType } from './core/interfaces/IThemeFactory';
-import type { GameStateSnapshot } from './core/singletons/GameManager';
+import { RoomDirector } from './model/builders/RoomDirector';
+import type { Room } from './model/entities/Room';
+import { HorrorThemeFactory } from './model/factories/HorrorThemeFactory';
+import { SciFiThemeFactory } from './model/factories/SciFiThemeFactory';
 import { SceneManager } from './view/scene/SceneManager';
+import { CommandLogView } from './view/ui/CommandLogView';
+import { HudView } from './view/ui/HudView';
+import { MainMenuView } from './view/ui/MainMenuView';
+import { ModalView } from './view/ui/ModalView';
 
 const sceneContainer = document.querySelector<HTMLDivElement>('#scene-container');
-const themeToggleBtn = document.querySelector<HTMLButtonElement>('#theme-toggle-btn');
-const pointerLockBanner = document.querySelector<HTMLDivElement>('#pointer-lock-banner');
-const crosshairEl = document.querySelector<HTMLDivElement>('#crosshair');
-const interactionPromptEl = document.querySelector<HTMLDivElement>('#interaction-prompt');
-const statusLineEl = document.querySelector<HTMLDivElement>('#status-line');
+const uiRoot = document.querySelector<HTMLDivElement>('#ui-root');
 
-if (
-  !sceneContainer ||
-  !themeToggleBtn ||
-  !pointerLockBanner ||
-  !crosshairEl ||
-  !interactionPromptEl ||
-  !statusLineEl
-) {
-  throw new Error('No se encontraron los elementos base del DOM para inicializar la Fase 2.');
+if (!sceneContainer || !uiRoot) {
+  throw new Error('No se encontraron #scene-container o #ui-root para iniciar la aplicación.');
 }
 
 const sceneManager = new SceneManager(sceneContainer);
 const controller = new GameController(sceneManager);
-const cameraController = sceneManager.getCameraController();
 const gameManager = controller.getGameManager();
+const cameraController = sceneManager.getCameraController();
+const previewDirector = new RoomDirector();
 
-let currentTheme: ThemeType = 'horror';
 let currentHover: HoverTargetInfo | null = null;
-let pinInputBuffer = '';
+let observedRoomForHud: Room | null = null;
 
-function updateThemeButtonLabel(): void {
-  themeToggleBtn!.textContent =
-    currentTheme === 'horror'
-      ? 'Cambiar a Nave Sci-Fi'
-      : 'Cambiar a Mansión de Terror';
+function bindActiveRoomToViews(room: Room | null): void {
+  if (observedRoomForHud) {
+    observedRoomForHud.detach(hudView);
+  }
+  observedRoomForHud = room;
+  if (room) {
+    room.attach(hudView);
+  }
+  modalView.bindRoomPuzzles(room);
 }
 
-function updateStatusLine(message: string): void {
-  const state = gameManager.getSnapshot();
-  statusLineEl!.textContent = `[${state.remainingFormattedTime}] (${state.solvedCount}/${state.totalPuzzles}) ${message}`;
-}
-
-function renderHoverPrompt(hover: HoverTargetInfo | null): void {
-  currentHover = hover;
-
-  if (!hover) {
-    pinInputBuffer = '';
-    crosshairEl!.classList.remove('active');
-    interactionPromptEl!.classList.add('hidden');
-    interactionPromptEl!.textContent = '';
+function renderMenuPreviewScene(theme: ThemeType): void {
+  if (gameManager.getLifecycleState() !== 'menu') {
     return;
   }
+  const factory =
+    theme === 'scifi' ? new SciFiThemeFactory() : new HorrorThemeFactory();
+  const previewRoom = previewDirector.constructRoom(factory);
+  sceneManager.buildRoomScene(previewRoom);
+}
 
-  crosshairEl!.classList.add('active');
-  interactionPromptEl!.classList.remove('hidden');
+const commandLogView = new CommandLogView(
+  uiRoot,
+  () => {
+    controller.undoLastAction();
+  },
+  (isOpen) => {
+    hudView.syncHistoryState(isOpen);
+    if (isOpen) {
+      cameraController.unlock();
+    } else if (
+      !modalView.isOpen() &&
+      gameManager.getLifecycleState() === 'playing'
+    ) {
+      cameraController.lock();
+    }
+  }
+);
 
-  if (hover.object.kind === 'switch_panel' && hover.switchSymbol) {
-    const seqSolved = Boolean(
-      gameManager.getCurrentRoom()?.getPuzzle('sequence_puzzle')?.getIsSolved()
+const modalView = new ModalView(uiRoot, controller, (isOpen) => {
+  hudView.setModalOpen(isOpen);
+});
+
+const hudView = new HudView(uiRoot, {
+  onToggleMute: () => controller.toggleAudioMute(),
+  onToggleFlashlight: () => controller.toggleFlashlight(),
+  onToggleHistory: () => {
+    commandLogView.toggle();
+  },
+  onUndo: () => {
+    if (!controller.undoLastAction()) {
+      hudView.showToast('No hay acciones reversibles para deshacer.', 'warning');
+    }
+  },
+  onRestart: () => {
+    modalView.close(false);
+    commandLogView.setOpen(false);
+    const restartedRoom = controller.restartCurrentGame();
+    bindActiveRoomToViews(restartedRoom);
+    cameraController.lock();
+  },
+  onReturnMenu: () => {
+    modalView.close(false);
+    commandLogView.setOpen(false);
+    bindActiveRoomToViews(null);
+    controller.returnToMainMenu();
+    renderMenuPreviewScene(mainMenuView.getSelectedTheme());
+  },
+  onSelectSlot: (slotIndex) => {
+    controller.selectInventorySlot(slotIndex);
+  },
+});
+
+const mainMenuView = new MainMenuView(uiRoot, {
+  onEnterRoom: (theme) => {
+    commandLogView.setOpen(false);
+    modalView.close(false);
+    const room = controller.startNewGame(theme);
+    bindActiveRoomToViews(room);
+    hudView.syncMuteState(controller.isAudioMuted());
+    hudView.syncFlashlightState(controller.isFlashlightOn());
+    hudView.showToast(
+      `Sala iniciada: ${room.themeConfiguration.narrativeConfig.roomTitle}`,
+      'info'
     );
-    interactionPromptEl!.textContent = seqSolved
-      ? hover.object.interactionPrompt
-      : `[E / Click] Accionar interruptor ${hover.switchSymbol} (o teclas 1=A, 2=B, 3=C)`;
-    return;
-  }
+    cameraController.lock();
+  },
+  onThemePreviewChange: (theme) => {
+    renderMenuPreviewScene(theme);
+  },
+});
 
-  if (hover.object.kind === 'safe' && hover.object.isLocked) {
-    const bufferDisplay = pinInputBuffer.padEnd(4, '_');
-    interactionPromptEl!.textContent = `${hover.object.interactionPrompt} — Teclado 0-9: [${bufferDisplay}]`;
-    return;
-  }
+// Suscripción Observer desacoplada entre Modelo/Invoker y las 4 Vistas UI
+gameManager.attach(mainMenuView);
+gameManager.attach(hudView);
+gameManager.attach(modalView);
+gameManager.getTimer().attach(hudView);
+gameManager.getInventory().attach(hudView);
 
-  interactionPromptEl!.textContent = hover.object.interactionPrompt;
-}
+controller.getCommandInvoker().attach(hudView);
+controller.getCommandInvoker().attach(modalView);
+controller.getCommandInvoker().attach(commandLogView);
 
 controller.setHoverListener((hover) => {
-  renderHoverPrompt(hover);
+  currentHover = hover;
+  const seqSolved = Boolean(
+    gameManager.getCurrentRoom()?.getPuzzle('sequence_puzzle')?.getIsSolved()
+  );
+  hudView.renderHover(hover, seqSolved);
 });
 
 controller.setInspectionListener((payload) => {
-  if (payload.noteContent) {
-    const singleLine = payload.noteContent.replace(/\s+/g, ' ').trim();
-    updateStatusLine(`${payload.title}: ${singleLine}`);
-    return;
-  }
-  updateStatusLine(`${payload.title}: ${payload.message}`);
-});
-
-gameManager.attach({
-  update: (snapshot: GameStateSnapshot): void => {
-    updateStatusLine(snapshot.statusMessage);
-  },
-});
-
-controller.getCommandInvoker().attach({
-  update: (historySnapshot): void => {
-    if (historySnapshot.eventType === 'undone') {
-      updateStatusLine(historySnapshot.statusMessage);
-    }
-  },
+  modalView.openFromInspection(payload);
 });
 
 cameraController.onLockChange((locked) => {
-  pointerLockBanner.classList.toggle('hidden', locked);
+  hudView.setPointerLocked(locked);
 });
 
 sceneManager.getDomElement().addEventListener('click', () => {
+  if (
+    gameManager.getLifecycleState() !== 'playing' ||
+    modalView.isOpen() ||
+    commandLogView.isOpen()
+  ) {
+    return;
+  }
+
   if (!cameraController.isLocked()) {
     gameManager.getAudioManager().unlockAudio();
     cameraController.lock();
@@ -119,65 +166,81 @@ sceneManager.getDomElement().addEventListener('click', () => {
       currentHover.object.id,
       currentHover.switchSymbol
     );
-    renderHoverPrompt(currentHover);
   }
 });
 
-themeToggleBtn.addEventListener('click', (event) => {
-  event.stopPropagation();
-  pinInputBuffer = '';
-  currentTheme = currentTheme === 'horror' ? 'scifi' : 'horror';
-  updateThemeButtonLabel();
-  controller.startNewGame(currentTheme);
-});
-
 window.addEventListener('keydown', (event) => {
-  if (event.code === 'KeyE' && currentHover) {
+  if (modalView.isOpen()) {
+    modalView.handleKeyDown(event);
+    return;
+  }
+
+  if (gameManager.getLifecycleState() !== 'playing') {
+    return;
+  }
+
+  if (event.code === 'KeyH') {
+    event.preventDefault();
+    commandLogView.toggle();
+    return;
+  }
+
+  if (event.code === 'Escape' && commandLogView.isOpen()) {
+    event.preventDefault();
+    commandLogView.setOpen(false);
+    return;
+  }
+
+  if (event.code === 'KeyE' && currentHover && !commandLogView.isOpen()) {
+    event.preventDefault();
     controller.handleObjectInteraction(
       currentHover.object.id,
       currentHover.switchSymbol
     );
-    renderHoverPrompt(currentHover);
     return;
   }
 
   if (event.code === 'KeyZ') {
-    const undone = controller.undoLastAction();
-    if (!undone) {
-      updateStatusLine('No hay acciones reversibles recientes para deshacer.');
+    event.preventDefault();
+    if (!controller.undoLastAction()) {
+      hudView.showToast('No hay acciones reversibles recientes para deshacer.', 'warning');
     }
+    return;
+  }
+
+  if (event.code === 'KeyF') {
+    event.preventDefault();
+    const on = controller.toggleFlashlight();
+    hudView.syncFlashlightState(on);
+    hudView.showToast(on ? 'Linterna encendida' : 'Linterna apagada', 'info');
+    return;
+  }
+
+  if (event.code === 'KeyM') {
+    event.preventDefault();
+    const muted = controller.toggleAudioMute();
+    hudView.syncMuteState(muted);
+    hudView.showToast(muted ? 'Audio silenciado' : 'Audio activado', 'info');
     return;
   }
 
   if (event.code === 'KeyR') {
-    pinInputBuffer = '';
-    controller.restartCurrentGame();
+    event.preventDefault();
+    commandLogView.setOpen(false);
+    const restartedRoom = controller.restartCurrentGame();
+    bindActiveRoomToViews(restartedRoom);
+    hudView.showToast('Sala reiniciada desde Prototype', 'info');
+    cameraController.lock();
     return;
   }
 
-  if (currentHover?.object.kind === 'switch_panel') {
-    if (event.key === '1') controller.submitSwitch('A');
-    if (event.key === '2') controller.submitSwitch('B');
-    if (event.key === '3') controller.submitSwitch('C');
-    return;
-  }
-
-  if (currentHover?.object.kind === 'safe' && currentHover.object.isLocked) {
-    if (/^\d$/.test(event.key)) {
-      pinInputBuffer += event.key;
-      if (pinInputBuffer.length >= 4) {
-        const pin = pinInputBuffer.slice(0, 4);
-        pinInputBuffer = '';
-        controller.submitPinCode(pin);
-      }
-      renderHoverPrompt(currentHover);
-    } else if (event.key === 'Backspace' && pinInputBuffer.length > 0) {
-      pinInputBuffer = pinInputBuffer.slice(0, -1);
-      renderHoverPrompt(currentHover);
-    }
+  if (/^Digit[1-5]$/.test(event.code)) {
+    const slotIndex = Number(event.code.replace('Digit', '')) - 1;
+    controller.selectInventorySlot(slotIndex);
   }
 });
 
-updateThemeButtonLabel();
-controller.startNewGame(currentTheme);
+// Arranque limpio en Menú Principal con vista previa 3D de fondo
+renderMenuPreviewScene('horror');
+mainMenuView.show();
 controller.startLoop();

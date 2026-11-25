@@ -109,11 +109,23 @@ export class GameController {
   }
 
   /**
+   * Finaliza la partida en curso y vuelve al menú principal limpiando el historial.
+   */
+  public returnToMainMenu(): void {
+    this.commandInvoker.clear();
+    this.sceneManager.getCameraController().unlock();
+    this.gameManager.returnToMenu();
+    this.lastHoverKey = null;
+    this.hoverListener?.(null);
+  }
+
+  /**
    * Traduce la interacción sobre un objeto 3D apuntado al comando concreto correspondiente.
    */
   public handleObjectInteraction(
     objectId: string,
-    switchSymbol?: SwitchSymbol
+    switchSymbol?: SwitchSymbol,
+    directSwitchToggle = false
   ): void {
     const room = this.gameManager.getCurrentRoom();
     if (!room || this.gameManager.getLifecycleState() !== 'playing') {
@@ -127,7 +139,7 @@ export class GameController {
 
     this.audioManager.unlockAudio();
 
-    if (target.kind === 'switch_panel' && switchSymbol) {
+    if (target.kind === 'switch_panel' && directSwitchToggle && switchSymbol) {
       const seqPuzzle = room.getPuzzle(target.linkedPuzzleId ?? 'sequence_puzzle');
       if (seqPuzzle && !seqPuzzle.getIsSolved()) {
         this.submitSwitch(switchSymbol);
@@ -145,10 +157,41 @@ export class GameController {
       return;
     }
 
+    if (target.kind === 'desk_box') {
+      if (target.isLocked) {
+        const inventory = this.gameManager.getInventory();
+        const hasAnyItem = inventory.getItems().length > 0;
+        if (hasAnyItem) {
+          const useItemCommand = new UseItemCommand(room, inventory, target.id);
+          this.commandInvoker.executeCommand(useItemCommand);
+
+          const updatedTarget = room.getObject(target.id);
+          if (updatedTarget && !updatedTarget.isLocked) {
+            const inspectUnlocked = new InspectObjectCommand(
+              room,
+              target.id,
+              (payload) => {
+                this.inspectionListener?.(payload);
+              }
+            );
+            this.commandInvoker.executeCommand(inspectUnlocked);
+          }
+          return;
+        }
+      }
+
+      const inspectDeskBox = new InspectObjectCommand(room, target.id, (payload) => {
+        this.inspectionListener?.(payload);
+      });
+      this.commandInvoker.executeCommand(inspectDeskBox);
+      return;
+    }
+
     if (target.kind === 'exit_door' && !room.exitDoor.getIsOpen()) {
       const useItemCommand = new UseItemCommand(
         room,
-        this.gameManager.getInventory()
+        this.gameManager.getInventory(),
+        target.id
       );
       this.commandInvoker.executeCommand(useItemCommand);
       return;
@@ -158,6 +201,47 @@ export class GameController {
       this.inspectionListener?.(payload);
     });
     this.commandInvoker.executeCommand(inspectCommand);
+  }
+
+  /**
+   * Selecciona una ranura rápida del inventario (`0..4`).
+   */
+  public selectInventorySlot(slotIndex: number): boolean {
+    if (this.gameManager.getLifecycleState() !== 'playing') {
+      return false;
+    }
+    this.audioManager.unlockAudio();
+    return this.gameManager.getInventory().selectSlot(slotIndex);
+  }
+
+  /**
+   * Alterna la linterna acoplada a la cámara del jugador.
+   */
+  public toggleFlashlight(): boolean {
+    this.audioManager.unlockAudio();
+    this.audioManager.playClick();
+    return this.sceneManager.toggleFlashlight();
+  }
+
+  public isFlashlightOn(): boolean {
+    return this.sceneManager.isFlashlightOn();
+  }
+
+  /**
+   * Silencia o reactiva los efectos de audio procedural.
+   */
+  public toggleAudioMute(): boolean {
+    const nextMuted = !this.audioManager.getIsMuted();
+    this.audioManager.setMuted(nextMuted);
+    if (!nextMuted) {
+      this.audioManager.unlockAudio();
+      this.audioManager.playClick();
+    }
+    return nextMuted;
+  }
+
+  public isAudioMuted(): boolean {
+    return this.audioManager.getIsMuted();
   }
 
   /**

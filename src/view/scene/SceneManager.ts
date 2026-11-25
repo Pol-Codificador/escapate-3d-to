@@ -50,7 +50,9 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
   private ambientLight: THREE.AmbientLight | null;
   private hemiLight: THREE.HemisphereLight | null;
   private mainLight: THREE.PointLight | null;
+  private extraLights: THREE.Light[];
   private flashlight: THREE.SpotLight | null;
+  private flashlightEnabled: boolean;
 
   private observedRoom: Room | null;
   private observedTimer: GameTimer | null;
@@ -68,6 +70,8 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
   private switchTargetAngles: Map<SwitchLeverSymbol, number>;
   private clueRevealProgressTarget: number;
   private clueRevealProgressCurrent: number;
+  private deskBoxOpenTarget: number;
+  private deskBoxOpenCurrent: number;
   private safeOpenTarget: number;
   private safeOpenCurrent: number;
   private exitOpenTarget: number;
@@ -90,7 +94,7 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.toneMappingExposure = 1.28;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.container.appendChild(this.renderer.domElement);
@@ -109,16 +113,18 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
     this.ambientLight = null;
     this.hemiLight = null;
     this.mainLight = null;
+    this.extraLights = [];
     this.flashlight = null;
+    this.flashlightEnabled = true;
 
     this.observedRoom = null;
     this.observedTimer = null;
     this.roomAssets = null;
 
     this.baseAmbientColor = new THREE.Color(0x222222);
-    this.baseAmbientIntensity = 0.5;
+    this.baseAmbientIntensity = 0.9;
     this.baseMainLightColor = new THREE.Color(0xffffff);
-    this.baseMainLightIntensity = 1.4;
+    this.baseMainLightIntensity = 1.8;
     this.flickerEnabled = false;
 
     this.elapsedTime = 0;
@@ -131,6 +137,8 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
     ]);
     this.clueRevealProgressTarget = 0;
     this.clueRevealProgressCurrent = 0;
+    this.deskBoxOpenTarget = 0;
+    this.deskBoxOpenCurrent = 0;
     this.safeOpenTarget = 0;
     this.safeOpenCurrent = 0;
     this.exitOpenTarget = 0;
@@ -193,9 +201,14 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
     this.isCriticalAlertActive = false;
     this.elapsedTime = 0;
 
+    const deskBoxPuzzle = room.getPuzzle('desk_box_puzzle');
     const seqPuzzle = room.getPuzzle('sequence_puzzle');
     const pinPuzzle = room.getPuzzle('pin_puzzle');
     const exitPuzzle = room.getPuzzle('exit_puzzle');
+
+    const deskBoxSolved = Boolean(deskBoxPuzzle?.getIsSolved());
+    this.deskBoxOpenTarget = deskBoxSolved ? 1 : 0;
+    this.deskBoxOpenCurrent = this.deskBoxOpenTarget;
 
     const seqSolved = Boolean(seqPuzzle?.getIsSolved());
     this.clueRevealProgressTarget = seqSolved ? 1 : 0;
@@ -267,6 +280,21 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
     return this.renderer.domElement;
   }
 
+  /**
+   * Alterna el encendido de la linterna de cámara (tecla `F` o botón HUD).
+   */
+  public toggleFlashlight(): boolean {
+    this.flashlightEnabled = !this.flashlightEnabled;
+    if (this.flashlight) {
+      this.flashlight.visible = this.flashlightEnabled;
+    }
+    return this.flashlightEnabled;
+  }
+
+  public isFlashlightOn(): boolean {
+    return this.flashlightEnabled;
+  }
+
   public dispose(): void {
     window.removeEventListener('resize', this.handleResizeBound);
     this.observedTimer?.detach(this);
@@ -293,6 +321,16 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
       return;
     }
 
+    if (snapshot.puzzleId === 'desk_box_puzzle' && snapshot.isSolved) {
+      this.deskBoxOpenTarget = 1;
+      if (this.roomAssets.deskBoxHandles) {
+        this.roomAssets.deskBoxHandles.lockMat.color.setHex(0x22cc66);
+        this.roomAssets.deskBoxHandles.lockMat.emissive.setHex(0x22ff88);
+        this.roomAssets.deskBoxHandles.interiorLight.intensity = 1.1;
+      }
+      return;
+    }
+
     if (snapshot.puzzleId === 'sequence_puzzle') {
       this.syncSwitchPanelVisuals(this.observedRoom);
 
@@ -302,6 +340,11 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
           this.observedRoom.themeConfiguration.themeType,
           true
         );
+        for (const cableMat of this.roomAssets.energyCableMaterials) {
+          cableMat.color.setHex(0x00f5d4);
+          cableMat.emissive.setHex(0x00f5d4);
+          cableMat.emissiveIntensity = 1.5;
+        }
       }
       return;
     }
@@ -359,6 +402,24 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
         handle.ledMaterial.emissiveIntensity = 0.5;
       }
     }
+
+    // Sincronizar los 5 LEDs de progreso en el panel físico
+    const filledCount = isSolved ? 5 : activeSteps.length;
+    this.roomAssets.switchStepMaterials.forEach((stepMat, idx) => {
+      if (isSolved) {
+        stepMat.color.setHex(0x22cc66);
+        stepMat.emissive.setHex(0x22ff88);
+        stepMat.emissiveIntensity = 1.4;
+      } else if (idx < filledCount) {
+        stepMat.color.setHex(0xffb703);
+        stepMat.emissive.setHex(0xffc300);
+        stepMat.emissiveIntensity = 1.2;
+      } else {
+        stepMat.color.setHex(0x262a30);
+        stepMat.emissive.setHex(0x000000);
+        stepMat.emissiveIntensity = 0.1;
+      }
+    });
   }
 
   private revealClueWallTexture(theme: ThemeType, revealed: boolean): void {
@@ -409,15 +470,19 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
   }
 
   private syncItemPickupVisibility(): void {
-    if (!this.observedRoom || !this.roomAssets?.itemPickupGroup) {
+    if (!this.observedRoom || !this.roomAssets) {
       return;
     }
-    const pickupObj = this.observedRoom.getObject('reward_item_pickup');
-    const shouldShow = Boolean(pickupObj?.isVisible);
-    if (!shouldShow && this.raycastSelector.getCurrentSelection()?.objectId === 'reward_item_pickup') {
-      this.raycastSelector.clearHighlight();
+
+    const selectedId = this.raycastSelector.getCurrentSelection()?.objectId;
+    for (const [objectId, entry] of this.roomAssets.itemPickupGroups.entries()) {
+      const pickupObj = this.observedRoom.getObject(objectId);
+      const shouldShow = Boolean(pickupObj?.isVisible);
+      if (!shouldShow && selectedId === objectId) {
+        this.raycastSelector.clearHighlight();
+      }
+      entry.group.visible = shouldShow;
     }
-    this.roomAssets.itemPickupGroup.visible = shouldShow;
   }
 
   private updateExitDoorIndicator(isOpen: boolean): void {
@@ -462,7 +527,18 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
         1.25 * this.clueRevealProgressCurrent;
     }
 
-    // 3. Apertura de puerta de caja fuerte (~105 grados hacia afuera)
+    // 3. Apertura de caja/cofre del escritorio (~100 grados hacia atrás)
+    if (this.roomAssets.deskBoxHandles) {
+      this.deskBoxOpenCurrent = THREE.MathUtils.lerp(
+        this.deskBoxOpenCurrent,
+        this.deskBoxOpenTarget,
+        lerpFactor
+      );
+      this.roomAssets.deskBoxHandles.lidPivot.rotation.x =
+        -THREE.MathUtils.degToRad(100) * this.deskBoxOpenCurrent;
+    }
+
+    // 4. Apertura de puerta de caja fuerte (~105 grados hacia afuera)
     if (this.roomAssets.safeHandles) {
       this.safeOpenCurrent = THREE.MathUtils.lerp(
         this.safeOpenCurrent,
@@ -473,14 +549,22 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
         -THREE.MathUtils.degToRad(105) * this.safeOpenCurrent;
     }
 
-    // 4. Rotación y flotación suave del ítem de recompensa cuando está visible
-    if (
-      this.roomAssets.itemPickupGroup &&
-      this.roomAssets.itemPickupGroup.visible
-    ) {
-      this.roomAssets.itemPickupGroup.rotation.y += deltaSeconds * 1.4;
-      this.roomAssets.itemPickupGroup.position.y =
-        this.roomAssets.itemPickupBaseY + Math.sin(this.elapsedTime * 2.6) * 0.04;
+    // 5. Rotación y flotación suave de todos los ítems visibles recolectables
+    let itemIndex = 0;
+    for (const entry of this.roomAssets.itemPickupGroups.values()) {
+      if (entry.group.visible) {
+        entry.group.rotation.y += deltaSeconds * 1.4;
+        entry.group.position.y =
+          entry.baseY + Math.sin(this.elapsedTime * 2.6 + itemIndex) * 0.035;
+      }
+      itemIndex += 1;
+    }
+
+    // 6. Parpadeo sutil de LEDs de servidores (Sci-Fi)
+    for (let i = 0; i < this.roomAssets.blinkingMaterials.length; i += 1) {
+      const mat = this.roomAssets.blinkingMaterials[i];
+      mat.emissiveIntensity =
+        0.55 + 0.6 * ((Math.sin(this.elapsedTime * 3.8 + i * 1.1) + 1) * 0.5);
     }
 
     // 5. Apertura suave de la puerta de salida
@@ -555,9 +639,9 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
     const isHorror = room.themeConfiguration.themeType === 'horror';
 
     this.baseAmbientColor.setHex(lighting.ambientColor);
-    this.baseAmbientIntensity = lighting.ambientIntensity + 0.35;
+    this.baseAmbientIntensity = lighting.ambientIntensity;
     this.baseMainLightColor.setHex(lighting.mainLightColor);
-    this.baseMainLightIntensity = lighting.mainLightIntensity * 8.5;
+    this.baseMainLightIntensity = lighting.mainLightIntensity * 12.5;
     this.flickerEnabled = lighting.flickerEnabled;
 
     this.ambientLight = new THREE.AmbientLight(
@@ -569,7 +653,7 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
     this.hemiLight = new THREE.HemisphereLight(
       lighting.mainLightColor,
       lighting.ambientColor,
-      isHorror ? 0.35 : 0.55
+      isHorror ? 0.68 : 0.85
     );
     this.hemiLight.position.set(0, room.dimensions.height, 0);
     this.scene.add(this.hemiLight);
@@ -577,18 +661,50 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
     this.mainLight = new THREE.PointLight(
       this.baseMainLightColor,
       this.baseMainLightIntensity,
-      16,
-      1.6
+      19,
+      1.4
     );
-    this.mainLight.position.set(0, room.dimensions.height - 0.65, 0);
+    this.mainLight.position.set(0, room.dimensions.height - 0.68, 0);
     this.mainLight.castShadow = true;
     this.mainLight.shadow.mapSize.set(1024, 1024);
     this.mainLight.shadow.bias = -0.002;
     this.scene.add(this.mainLight);
 
+    const localLightSpecs: Array<{
+      color: number;
+      intensity: number;
+      distance: number;
+      pos: [number, number, number];
+    }> = isHorror
+      ? [
+          { color: 0xffbe76, intensity: 4.2, distance: 6.2, pos: [-3.2, 2.25, -3.7] },
+          { color: 0xffaa55, intensity: 3.4, distance: 5.5, pos: [3.2, 1.45, -3.8] },
+          { color: 0x8ecae6, intensity: 5.2, distance: 7.5, pos: [-4.45, 2.2, 0.22] },
+          { color: 0xffbe76, intensity: 3.6, distance: 5.8, pos: [0, 2.25, 4.1] },
+        ]
+      : [
+          { color: 0xd8f3ff, intensity: 4.5, distance: 6.5, pos: [-3.2, 2.9, -3.6] },
+          { color: 0xffb703, intensity: 3.6, distance: 5.5, pos: [3.2, 1.85, -3.7] },
+          { color: 0x00d2ff, intensity: 3.8, distance: 6.5, pos: [-4.35, 2.2, 0.22] },
+          { color: 0xb8ecff, intensity: 3.8, distance: 5.8, pos: [0, 2.4, 4.1] },
+        ];
+
+    for (const spec of localLightSpecs) {
+      const point = new THREE.PointLight(
+        spec.color,
+        spec.intensity,
+        spec.distance,
+        1.5
+      );
+      point.position.set(spec.pos[0], spec.pos[1], spec.pos[2]);
+      this.scene.add(point);
+      this.extraLights.push(point);
+    }
+
     if (this.flashlight) {
       this.flashlight.color.setHex(isHorror ? 0xffe4b8 : 0xd8f3ff);
-      this.flashlight.intensity = isHorror ? 2.4 : 1.5;
+      this.flashlight.intensity = isHorror ? 1.85 : 1.2;
+      this.flashlight.visible = this.flashlightEnabled;
     }
   }
 
@@ -615,6 +731,10 @@ export class SceneManager implements IObserver<SceneObservedSnapshot> {
       this.scene.remove(this.mainLight);
       this.mainLight = null;
     }
+    for (const extra of this.extraLights) {
+      this.scene.remove(extra);
+    }
+    this.extraLights = [];
 
     if (this.roomAssets) {
       this.scene.remove(this.roomAssets.rootGroup);

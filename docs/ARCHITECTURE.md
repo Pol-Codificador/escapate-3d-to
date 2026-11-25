@@ -21,18 +21,17 @@ El proyecto **Escápate!!** separa estrictamente su código en tres capas indepe
    - Renderiza la escena 3D procedural con **Three.js** y el **HUD HTML/CSS puro**.
    - Nunca altera directamente reglas ni atributos internos del Modelo: solo **observa** (`IObserver<T>`) las instantáneas emitidas y **envía** eventos de entrada hacia el Controlador.
 
-### Recorrido completo de una interacción del jugador
+### Recorrido completo de una interacción del jugador y flujo de 4 acertijos
 
-1. El jugador apunta en primera persona con la cámara FPS (`Raycaster`) a un objeto (por ejemplo, `switch_panel` o `safe`) y presiona `Click` o `E`.
-2. La **Vista** identifica el `objectId` apuntado y notifica al **Controlador**.
-3. El **Controlador** instancia el `ICommand` correspondiente (ej. `ToggleSwitchCommand` o `InputCodeCommand`), lo ejecuta (`execute()`) y lo apila en el historial si es reversible.
-4. El comando invoca el método de dominio en el **Modelo** (`puzzle.attempt(input)`), el cual delega la validación a su `IPuzzleValidationStrategy` activa.
-5. `Puzzle` actualiza su progreso o estado resuelto y llama a `notify(snapshot)`.
-6. Múltiples observadores reaccionan automáticamente sin acoplarse entre sí:
-   - `ExitDoor` se desbloquea y abre si su `exit_puzzle` fue resuelto.
-   - `Room` aplica los efectos encadenados (`PuzzleSolvedEffect`), revelando pistas en `clue_wall` o habilitando el `reward_item_pickup`.
-   - `AudioManager` sintetiza el efecto sonoro procedural (acierto, error, apertura de puerta o latido crítico).
-   - `GameManager` detecta victoria (`'won'`) o derrota (`'lost'`) y notifica a la **Vista / HUD** para actualizar mensajes, luces e interfaz.
+1. El jugador elige una temática en `MainMenuView` (**Mansión de Terror** o **Nave Sci-Fi**) y entra a la sala en primera persona.
+2. En la sala reúne los 3 fragmentos de pista encadenados:
+   - **Pista #1 (`desk_note`):** entrega los pasos 1–2 de la secuencia y revela dónde reposa la llave pequeña / chip (`small_key_pickup`).
+   - **Acertijo 1 (`desk_box_puzzle` con `ItemUnlockStrategy`):** recoge `small_key_pickup` y abre `desk_box` mediante `UseItemCommand` para revelar la **Pista #2** (pasos 3–4).
+   - **Pista #3 (`wall_marking`):** grabada en el muro sur con el paso 5 (con repeticiones).
+   - **Acertijo 2 (`sequence_puzzle` con `SequenceStrategy` de 5 pasos):** ingresa `B→A→C→B→A` (Terror) o `C→B→A→C→B` (Sci-Fi) en `ModalView`, encendiendo `clue_wall` (`4829` / `7391`).
+   - **Acertijo 3 (`pin_puzzle` con `PinCodeStrategy`):** ingresa el PIN en `safe` mediante el teclado modal, liberando `reward_item_pickup`.
+   - **Acertijo 4 (`exit_puzzle` reutilizando `ItemUnlockStrategy`):** recoge el ítem final y abre `exit_door`.
+3. Toda interacción desde la escena 3D o modales pasa por `GameController` $\rightarrow$ `CommandInvoker` $\rightarrow$ `ICommand` $\rightarrow$ Modelo, notificando por **Observer** a `ExitDoor`, `Room`, `AudioManager`, `GameManager`, `SceneManager`, `HudView`, `ModalView` y `CommandLogView`.
 
 ---
 
@@ -40,15 +39,15 @@ El proyecto **Escápate!!** separa estrictamente su código en tres capas indepe
 
 ```mermaid
 flowchart TD
-    Player["Jugador (WASD / Raton / Click / E / Z / R)"] --> ViewInput["Vista 3D FPS: SceneManager + CameraController + RaycastSelector"]
+    Player["Jugador (WASD / Raton / E / Z / F / H / R)"] --> ViewInput["Vista 3D y UI: SceneManager + MainMenuView + ModalView + HudView + CommandLogView"]
     ViewInput -->|"Intencion de interaccion"| Controller["GameController + CommandInvoker (src/controller/)"]
     Controller -->|"Crea y ejecuta"| Command["ICommand: InspectObject / ToggleSwitch / InputCode / PickUpItem / UseItem"]
     Command -->|"Opera sobre receptores"| ModelDomain["Modelo Puro (src/model/)"]
 
     subgraph ModelLayer["Capa Modelo — CERO Three.js y CERO DOM"]
-        ModelDomain --> Puzzle["Puzzle (Context + Subject)"]
+        ModelDomain --> Puzzle["Puzzle (Context + Subject): 4 Acertijos"]
         Puzzle --> Strategy["IPuzzleValidationStrategy"]
-        ModelDomain --> Room["Room + InteractiveObject + Inventory + GameTimer"]
+        ModelDomain --> Room["Room + InteractiveObject (9) + Inventory + GameTimer"]
         Factories["IThemeFactory + RoomDirector + RoomBuilder"] -->|"Construye y clona via IPrototype"| Room
     end
 
@@ -60,11 +59,12 @@ flowchart TD
     Puzzle -->|"notify(PuzzleSnapshot)"| AudioManager
     Inventory["Inventory (Subject)"] -->|"notify(InventorySnapshot)"| AudioManager
 
-    GameManager -->|"notify(GameStateSnapshot)"| ViewRender["SceneManager + RoomMeshFactory + ProceduralTextureFactory"]
+    GameManager -->|"notify(GameStateSnapshot)"| ViewRender["SceneManager + MainMenuView + HudView + ModalView"]
     Puzzle -->|"notify(PuzzleSnapshot)"| ViewRender
     Room -->|"notify(RoomSnapshot)"| ViewRender
     Timer -->|"notify(TimerSnapshot)"| ViewRender
-    CommandInvoker["CommandInvoker (Subject)"] -->|"notify(CommandHistorySnapshot)"| ViewRender
+    Inventory -->|"notify(InventorySnapshot)"| ViewRender
+    CommandInvoker["CommandInvoker (Subject)"] -->|"notify(CommandHistorySnapshot)"| CommandLogView["CommandLogView + HudView + ModalView"]
     AudioManager -->|"Web Audio API procedural"| SoundOut["Salida de Audio"]
 ```
 
@@ -254,8 +254,32 @@ classDiagram
     class SceneManager {
         +bindTimer(timer: GameTimer) void
         +buildRoomScene(room: Room) void
+        +toggleFlashlight() boolean
         +update(data: SceneObservedSnapshot) void
         +renderFrame(deltaSeconds: number) RaycastTargetHit
+    }
+
+    class MainMenuView {
+        +update(snapshot: GameStateSnapshot) void
+        +show() void
+        +hide() void
+    }
+
+    class ModalView {
+        +openFromInspection(payload: InspectionPayload) void
+        +close(resumePointerLock: boolean) void
+        +update(snapshot: ModalObservedSnapshot) void
+    }
+
+    class HudView {
+        +renderHover(hover: HoverTargetInfo, solved: boolean) void
+        +showToast(message: string, variant) void
+        +update(snapshot: HudObservedSnapshot) void
+    }
+
+    class CommandLogView {
+        +toggle() boolean
+        +update(snapshot: CommandHistorySnapshot) void
     }
 
     IPuzzleValidationStrategy <|.. SequenceStrategy
@@ -270,12 +294,22 @@ classDiagram
     IObserver <|.. ExitDoor
     IObserver <|.. AudioManager
     IObserver <|.. SceneManager
+    IObserver <|.. MainMenuView
+    IObserver <|.. ModalView
+    IObserver <|.. HudView
+    IObserver <|.. CommandLogView
     Puzzle --> ExitDoor : "notifica"
     Puzzle --> AudioManager : "notifica"
     Puzzle --> SceneManager : "notifica"
+    Puzzle --> ModalView : "notifica"
     GameTimer --> AudioManager : "notifica"
     GameTimer --> SceneManager : "notifica"
+    GameTimer --> HudView : "notifica"
     Inventory --> AudioManager : "notifica"
+    Inventory --> HudView : "notifica"
+    CommandInvoker --> CommandLogView : "notifica"
+    CommandInvoker --> HudView : "notifica"
+    CommandInvoker --> ModalView : "notifica"
 
     ICommand <|.. InspectObjectCommand
     ICommand <|.. ToggleSwitchCommand
@@ -427,9 +461,9 @@ classDiagram
 
 | Categoría | Patrón | Clases / Contratos Concretos | Problema de Diseño que Resuelve |
 | --- | --- | --- | --- |
-| **Arquitectónico** | **MVC** | Modelo (`src/model/`), Vista (`SceneManager`, `CameraController`, `RaycastSelector`, `RoomMeshFactory`, `ProceduralTextureFactory`), Controlador (`GameController`) | Aísla al 100 % las reglas de dominio de Three.js y del DOM para poder probar, clonar y evolucionar cada capa sin acoplamientos. |
-| **Comportamental** | **Observer** | `ISubject<T>`, `IObserver<T>`, `GameTimer`, `Inventory`, `Puzzle`, `Room`, `CommandInvoker`, `ExitDoor`, `GameManager`, `AudioManager`, `SceneManager` | Desacopla la emisión de cambios de estado del Modelo e Invoker de los múltiples consumidores reactivos (puerta, audio, sala, escena 3D, HUD). |
-| **Comportamental** | **Strategy** | `IPuzzleValidationStrategy`, `Puzzle` (Context), `SequenceStrategy`, `PinCodeStrategy`, `ItemUnlockStrategy` | Permite validar secuencias con `popStep()`, PIN de 4 dígitos o uso de ítems sin condicionales rígidos ni herencia explosiva en `Puzzle`. |
+| **Arquitectónico** | **MVC** | Modelo (`src/model/`), Vista (`SceneManager`, `CameraController`, `RaycastSelector`, `RoomMeshFactory`, `ProceduralTextureFactory`, `MainMenuView`, `ModalView`, `HudView`, `CommandLogView`), Controlador (`GameController`) | Aísla al 100 % las reglas de dominio de Three.js y del DOM para poder probar, clonar y evolucionar cada capa sin acoplamientos. |
+| **Comportamental** | **Observer** | `ISubject<T>`, `IObserver<T>`, `GameTimer`, `Inventory`, `Puzzle`, `Room`, `CommandInvoker`, `ExitDoor`, `GameManager`, `AudioManager`, `SceneManager`, `MainMenuView`, `ModalView`, `HudView`, `CommandLogView` | Desacopla la emisión de cambios de estado del Modelo e Invoker de los múltiples consumidores reactivos (puerta, audio, sala, escena 3D, HUD, modales y log). |
+| **Comportamental** | **Strategy** | `IPuzzleValidationStrategy`, `Puzzle` (Context), `SequenceStrategy` (5 pasos), `PinCodeStrategy`, `ItemUnlockStrategy` (reutilizada en `desk_box` y `exit_door`) | Permite validar secuencias con `popStep()`, PIN de 4 dígitos o uso de ítems sin condicionales rígidos ni herencia explosiva en `Puzzle`. |
 | **Comportamental** | **Command** | `ICommand`, `CommandInvoker`, `InspectObjectCommand`, `ToggleSwitchCommand`, `InputCodeCommand`, `PickUpItemCommand`, `UseItemCommand` | Encapsula acciones del jugador como objetos autónomos con historial cronológico observable y soporte nativo de reversión (`undo()`). |
 | **Creacional** | **Abstract Factory** | `IThemeFactory`, `HorrorThemeFactory`, `SciFiThemeFactory` | Garantiza familias coherentes de colores, luces, narrativa, audio y acertijos por temática sin `if/switch` en `RoomDirector`. |
 | **Creacional** | **Builder** | `RoomBuilder`, `RoomDirector`, producto `Room` | Separa la construcción paso a paso y el posicionamiento sin solapamientos de una sala 10×4×10 m de su representación final. |

@@ -14,6 +14,11 @@
  */
 export interface ICommand {
   /**
+   * Nombre canónico de la clase comando para auditoría y visualización en vivo.
+   */
+  readonly commandName?: string;
+
+  /**
    * Ejecuta la acción encapsulada sobre el receptor correspondiente del Modelo.
    */
   execute(): void;

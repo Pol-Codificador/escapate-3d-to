@@ -41,13 +41,13 @@ export class SciFiThemeFactory implements IThemeFactory {
 
   public createLightingConfig(): ThemeLightingConfig {
     return {
-      ambientColor: 0x1d3557,
-      ambientIntensity: 0.55,
-      mainLightColor: 0xd8f3ff,
-      mainLightIntensity: 1.5,
+      ambientColor: 0x3b5978,
+      ambientIntensity: 1.05,
+      mainLightColor: 0xe6f7ff,
+      mainLightIntensity: 1.85,
       accentLightColor: 0x00f5d4,
-      fogColor: 0x071019,
-      fogDensity: 0.035,
+      fogColor: 0x091522,
+      fogDensity: 0.016,
       flickerEnabled: false,
     };
   }
@@ -57,13 +57,13 @@ export class SciFiThemeFactory implements IThemeFactory {
       themeName: 'Nave Sci-Fi',
       roomTitle: 'Módulo de Contención — Estación Orbital Aether-9',
       introText:
-        'Alerta de despresurización activa. Reinicia los circuitos auxiliares, descifra el proyector holográfico y libera la Tarjeta de Acceso Nivel 5 antes del colapso.',
+        'Alerta de despresurización activa. Reúne los 3 fragmentos del protocolo de arranque, calibra los circuitos auxiliares, descifra el holograma y libera la Tarjeta Nivel 5 antes del colapso.',
       escapeSuccessMessage:
         '¡Compuerta presurizada abierta! Has evacuado el módulo orbital a tiempo.',
       timeOutMessage:
         'Soporte vital agotado. La compuerta de emergencia permaneció sellada.',
       atmosphereHint:
-        'Consulta el datapad sobre la consola metálica para calibrar los circuitos auxiliares.',
+        'Consulta el datapad del ingeniero sobre la consola metálica para iniciar el diagnóstico.',
     };
   }
 
@@ -78,12 +78,22 @@ export class SciFiThemeFactory implements IThemeFactory {
 
   public createGameplayCatalog(): ThemeGameplayCatalog {
     return {
+      deskBoxPuzzle: {
+        id: 'desk_box_puzzle',
+        title: 'Compartimento de Consola',
+        description:
+          'Inserta el Chip de Mantenimiento en el compartimento auxiliar junto a la consola.',
+        strategy: new ItemUnlockStrategy(
+          'service_chip',
+          'Chip de Mantenimiento'
+        ),
+      },
       sequencePuzzle: {
         id: 'sequence_puzzle',
         title: 'Panel de Circuitos Auxiliares',
         description:
-          'Enruta los nodos energéticos auxiliares (A, B, C) siguiendo la secuencia de arranque del datapad.',
-        strategy: new SequenceStrategy(['C', 'B', 'A']),
+          'Enruta los nodos energéticos (A, B, C) con la secuencia de 5 pasos reconstruida de los registros.',
+        strategy: new SequenceStrategy(['C', 'B', 'A', 'C', 'B']),
       },
       pinPuzzle: {
         id: 'pin_puzzle',
@@ -102,6 +112,13 @@ export class SciFiThemeFactory implements IThemeFactory {
           'Tarjeta de Acceso Nivel 5'
         ),
       },
+      initialItem: {
+        id: 'service_chip',
+        name: 'Chip de Mantenimiento',
+        description:
+          'Módulo de diagnóstico electrónico hallado en la estación de carga. Libera el compartimento de consola.',
+        iconType: 'tool',
+      },
       rewardItem: {
         id: 'access_card_lv5',
         name: 'Tarjeta de Acceso Nivel 5',
@@ -111,41 +128,78 @@ export class SciFiThemeFactory implements IThemeFactory {
       },
       objects: {
         deskNote: {
-          name: 'Datapad en Consola Metálica',
-          interactionPrompt: 'Leer datapad técnico [E]',
+          name: 'Datapad del Ingeniero',
+          interactionPrompt: 'Leer datapad del ingeniero [E]',
           description:
-            'Tableta táctica acoplada a la consola de ingeniería con el protocolo de reinicio.',
+            'Tableta táctica acoplada a la consola de ingeniería con la primera parte del protocolo.',
           noteContent:
-            'REGISTRO DE INGENIERÍA — PROTOCOLO DE EMERGENCIA:\n' +
-            'Para alimentar el proyector holográfico del sector este, activa los circuitos en orden inverso al estándar:\n' +
-            '1° Conmuta el nodo C para purgar la sobrecarga.\n' +
-            '2° Estabiliza el nodo B como puente térmico.\n' +
-            '3° Activa el nodo A para proyectar la clave holográfica.\n' +
-            'Secuencia obligatoria: C → B → A.',
+            'DATAPAD DEL INGENIERO — FRAGMENTO #1 DE 3:\n' +
+            'El proyector holográfico del mamparo este requiere una secuencia de 5 pulsos.\n' +
+            'Pasos iniciales del arranque:\n' +
+            '• Paso 1: Nodo C (purga de sobrecarga)\n' +
+            '• Paso 2: Nodo B (puente térmico)\n' +
+            'Inicio: C → B → ...\n\n' +
+            'Aviso de turno: Los pasos 3 y 4 están respaldados en el Compartimento de Consola lateral. ' +
+            'Dejé el Chip de Mantenimiento en el estante de herramientas del sector noroeste.',
+        },
+        smallKeyPickup: {
+          name: 'Chip de Mantenimiento',
+          interactionPrompt: 'Recoger Chip de Mantenimiento [E]',
+          description:
+            'Chip de servicio con pines dorados descansando sobre la estación de carga.',
+        },
+        deskBox: {
+          name: 'Compartimento de Consola',
+          interactionPrompt: 'Desbloquear compartimento de consola [E]',
+          description:
+            'Módulo blindado junto a la consola principal. Requiere el Chip de Mantenimiento.',
+          noteContent:
+            'Compartimento bloqueado por protocolo técnico. Inserta el Chip de Mantenimiento ubicado en la estación de herramientas.',
+          activatedPrompt: 'Leer respaldo de consola [E]',
+          activatedDescription:
+            'Compuerta de servicio abierta; la pantalla interna muestra el segundo fragmento del protocolo.',
+          activatedNoteContent:
+            'RESPALDO DE CONSOLA — FRAGMENTO #2 DE 3:\n' +
+            'Continuación de la secuencia de nodos (pasos 3 y 4):\n' +
+            '• Paso 3: Nodo A (estabilización de fase)\n' +
+            '• Paso 4: Nodo C (realimentación de flujo)\n' +
+            'Tramo intermedio: ... → A → C → ...\n\n' +
+            'El paso 5 quedó marcado en el Panel de Advertencia del mamparo sur.',
+        },
+        wallMarking: {
+          name: 'Panel de Advertencia en Mamparo',
+          interactionPrompt: 'Inspeccionar panel rallado del mamparo [E]',
+          description:
+            'Placa técnica rallada sobre el mamparo sur con marcas de emergencia grabadas por la tripulación.',
+          noteContent:
+            'PANEL DE ADVERTENCIA — FRAGMENTO #3 DE 3:\n' +
+            '«PROTOCOLO MANUAL DE CIERRE:\n' +
+            '• Paso 5: → B (cierra la calibración de cinco ciclos).»\n\n' +
+            'Ingresa los 5 pasos completos en el Panel de Circuitos Auxiliares.',
         },
         switchPanel: {
           name: 'Panel de Circuitos Auxiliares',
-          interactionPrompt: 'Calibrar nodos de circuito (A / B / C) [E]',
+          interactionPrompt: 'Abrir panel de circuitos (5 pasos: A / B / C) [E]',
           description:
-            'Interfaz modular con tres interruptores capacitivos etiquetados A, B y C.',
+            'Interfaz modular con tres interruptores capacitivos (A, B, C) y barra de 5 ciclos.',
           activatedPrompt: 'Circuitos auxiliares en línea [E]',
           activatedDescription:
-            'Los nodos C → B → A están sincronizados en verde; el proyector holográfico está transmitiendo.',
+            'Los 5 ciclos (C → B → A → C → B) están sincronizados en verde; el proyector holográfico está transmitiendo.',
         },
         clueWall: {
           name: 'Proyector Holográfico de Pared',
           interactionPrompt: 'Inspeccionar proyector apagado [E]',
           description:
-            'Emisor holográfico en espera. Requiere energía de los circuitos auxiliares.',
+            'Emisor holográfico en espera. Requiere completar los 5 pasos en los circuitos auxiliares.',
           noteContent:
-            'Proyector sin alimentación. Calibra primero el panel de circuitos auxiliares.',
+            'Proyector sin alimentación. Calibra primero los 5 nodos del panel de circuitos auxiliares.',
           activatedPrompt: 'Leer código holográfico [E]',
           activatedDescription:
             'Un campo holográfico cian proyecta cuatro dígitos suspendidos en el aire.',
           activatedNoteContent:
             'TRANSMISIÓN HOLOGRÁFICA ACTIVA:\n\n' +
             'CÓDIGO DE TERMINAL CRIOGÉNICA: 7391\n\n' +
-            'Introduce este PIN en la terminal criogénica para liberar la Tarjeta de Acceso Nivel 5.',
+            'Introduce este PIN en la Terminal Criogénica para liberar la Tarjeta de Acceso Nivel 5.',
         },
         safe: {
           name: 'Terminal Criogénica',

@@ -119,12 +119,17 @@ export interface ThemeObjectTextSpec {
  * para construir una sala completa sin condicionales sobre la temática.
  */
 export interface ThemeGameplayCatalog {
+  readonly deskBoxPuzzle: ThemePuzzleSpec;
   readonly sequencePuzzle: ThemePuzzleSpec;
   readonly pinPuzzle: ThemePuzzleSpec;
   readonly exitPuzzle: ThemePuzzleSpec;
+  readonly initialItem: ThemeRewardItemSpec;
   readonly rewardItem: ThemeRewardItemSpec;
   readonly objects: {
     readonly deskNote: ThemeObjectTextSpec;
+    readonly smallKeyPickup: ThemeObjectTextSpec;
+    readonly deskBox: ThemeObjectTextSpec;
+    readonly wallMarking: ThemeObjectTextSpec;
     readonly switchPanel: ThemeObjectTextSpec;
     readonly clueWall: ThemeObjectTextSpec;
     readonly safe: ThemeObjectTextSpec;

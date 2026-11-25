@@ -11,6 +11,7 @@
 import { AudioManager } from '../../core/singletons/AudioManager';
 import type { InteractiveObjectKind } from '../../model/entities/InteractiveObject';
 import type { Room } from '../../model/entities/Room';
+import { ItemUnlockStrategy } from '../../model/puzzles/strategies/ItemUnlockStrategy';
 import type { UndoableCommand } from './CommandInvoker';
 
 /**
@@ -42,6 +43,8 @@ export interface InspectionPayload {
  * Comando concreto para inspeccionar un `InteractiveObject` dentro de `Room`.
  */
 export class InspectObjectCommand implements UndoableCommand {
+  public readonly commandName = 'InspectObjectCommand';
+
   private readonly room: Room;
   private readonly objectId: string;
   private readonly onInspect?: (payload: InspectionPayload) => void;
@@ -70,12 +73,26 @@ export class InspectObjectCommand implements UndoableCommand {
     }
 
     this.inspectedObjectName = target.name;
-    const responseKind = this.resolveResponseKind(target.kind, target.linkedPuzzleId, target.isActivated, target.noteContent);
+    const responseKind = this.resolveResponseKind(
+      target.kind,
+      target.linkedPuzzleId,
+      target.isLocked,
+      target.isActivated,
+      target.noteContent
+    );
+
+    const displayMessage = this.resolveDisplayMessage(
+      target.name,
+      target.kind,
+      target.description,
+      target.isLocked,
+      target.linkedPuzzleId
+    );
 
     const summaryMessage =
       responseKind === 'read_note' && target.noteContent
         ? `${target.name}: ${this.condenseText(target.noteContent)}`
-        : `${target.name}: ${target.description}`;
+        : `${target.name}: ${displayMessage}`;
 
     AudioManager.getInstance().playClick();
     this.room.setStatus(this.room.getStatus(), summaryMessage);
@@ -86,7 +103,7 @@ export class InspectObjectCommand implements UndoableCommand {
       kind: target.kind,
       responseKind,
       title: target.name,
-      message: target.description,
+      message: displayMessage,
       noteContent: target.noteContent,
       isLocked: target.isLocked,
       isActivated: target.isActivated,
@@ -109,6 +126,7 @@ export class InspectObjectCommand implements UndoableCommand {
   private resolveResponseKind(
     kind: InteractiveObjectKind,
     linkedPuzzleId: string | undefined,
+    isLocked: boolean,
     isActivated: boolean,
     noteContent: string | undefined
   ): InspectionResponseKind {
@@ -118,7 +136,10 @@ export class InspectObjectCommand implements UndoableCommand {
 
     switch (kind) {
       case 'note':
+      case 'wall_marking':
         return 'read_note';
+      case 'desk_box':
+        return !isLocked && noteContent ? 'read_note' : 'show_clue';
       case 'switch_panel':
         return linkedPuzzle && !linkedPuzzle.getIsSolved()
           ? 'open_switch_panel'
@@ -132,6 +153,22 @@ export class InspectObjectCommand implements UndoableCommand {
       default:
         return 'show_clue';
     }
+  }
+
+  private resolveDisplayMessage(
+    objectName: string,
+    kind: InteractiveObjectKind,
+    defaultDescription: string,
+    isLocked: boolean,
+    linkedPuzzleId: string | undefined
+  ): string {
+    if (kind === 'desk_box' && isLocked && linkedPuzzleId) {
+      const strategy = this.room.getPuzzle(linkedPuzzleId)?.getStrategy();
+      if (strategy instanceof ItemUnlockStrategy) {
+        return `Cerradura bloqueada: necesitas usar «${strategy.getRequiredItemLabel()}» para abrir "${objectName}".`;
+      }
+    }
+    return defaultDescription;
   }
 
   private condenseText(raw: string): string {

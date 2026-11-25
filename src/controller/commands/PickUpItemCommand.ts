@@ -17,6 +17,8 @@ import type { UndoableCommand } from './CommandInvoker';
  * Comando concreto reversible para recoger `bronze_key` o `access_card_lv5`.
  */
 export class PickUpItemCommand implements UndoableCommand {
+  public readonly commandName = 'PickUpItemCommand';
+
   private readonly room: Room;
   private readonly inventory: Inventory;
   private readonly objectId: string;
@@ -78,10 +80,7 @@ export class PickUpItemCommand implements UndoableCommand {
       return false;
     }
 
-    const exitPuzzle = this.room.getPuzzle(
-      this.room.exitDoor.linkedPuzzleId ?? 'exit_puzzle'
-    );
-    if (exitPuzzle?.getIsSolved()) {
+    if (this.room.getStatus() !== 'in_progress') {
       return false;
     }
 

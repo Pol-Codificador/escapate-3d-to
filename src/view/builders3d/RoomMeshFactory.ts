@@ -75,17 +75,37 @@ export interface ColliderBox2D {
 }
 
 /**
+ * Referencias animables de `desk_box` (tapa pivotante, indicador y luz interior).
+ */
+export interface DeskBoxVisualHandles {
+  readonly lidPivot: THREE.Group;
+  readonly lockMat: THREE.MeshStandardMaterial;
+  readonly interiorLight: THREE.PointLight;
+}
+
+/**
+ * Entrada de ítem recolectable en escena para animar flotación y sincronizar visibilidad.
+ */
+export interface ItemPickupVisualEntry {
+  readonly group: THREE.Group;
+  readonly baseY: number;
+}
+
+/**
  * Conjunto completo de mallas, grupos interactivos, luces y colisionadores generados para una sala.
  */
 export interface BuiltRoomSceneAssets {
   readonly rootGroup: THREE.Group;
   readonly interactiveGroups: Map<string, THREE.Group>;
   readonly switchHandles: Map<SwitchLeverSymbol, SwitchVisualHandles>;
+  readonly switchStepMaterials: THREE.MeshStandardMaterial[];
   readonly clueWallHandles: ClueWallVisualHandles | null;
+  readonly deskBoxHandles: DeskBoxVisualHandles | null;
   readonly safeHandles: SafeVisualHandles | null;
-  readonly itemPickupGroup: THREE.Group | null;
-  readonly itemPickupBaseY: number;
+  readonly itemPickupGroups: Map<string, ItemPickupVisualEntry>;
   readonly exitDoorHandles: ExitDoorVisualHandles | null;
+  readonly blinkingMaterials: THREE.MeshStandardMaterial[];
+  readonly energyCableMaterials: THREE.MeshStandardMaterial[];
   readonly colliders: ColliderBox2D[];
   readonly disposableTextures: THREE.Texture[];
 }
@@ -109,6 +129,10 @@ export class RoomMeshFactory {
 
     const interactiveGroups = new Map<string, THREE.Group>();
     const switchHandles = new Map<SwitchLeverSymbol, SwitchVisualHandles>();
+    const switchStepMaterials: THREE.MeshStandardMaterial[] = [];
+    const itemPickupGroups = new Map<string, ItemPickupVisualEntry>();
+    const blinkingMaterials: THREE.MeshStandardMaterial[] = [];
+    const energyCableMaterials: THREE.MeshStandardMaterial[] = [];
     const colliders: ColliderBox2D[] = [];
     const disposableTextures: THREE.Texture[] = [];
 
@@ -116,10 +140,20 @@ export class RoomMeshFactory {
     const palette = room.themeConfiguration.colorPalette;
     const secretPin = this.extractSecretPin(room);
 
-    // 1. Estructura arquitectónica de la habitación (10 × 4 × 10 m)
+    // 1. Estructura arquitectónica de la habitación (10 × 4 × 10 m) y luminarias de techo
     this.buildArchitecture(rootGroup, room, disposableTextures);
 
-    // 2. Pedestal fijo bajo la zona del ítem recompensa (x = 3.6, z = 0.5)
+    // 2. Decoración temática rica (estantería/estación, alfombra/núcleo, ventanal, racks/butaca, cuadros, cables)
+    this.buildThematicDecor(
+      rootGroup,
+      room,
+      disposableTextures,
+      colliders,
+      blinkingMaterials,
+      energyCableMaterials
+    );
+
+    // 3. Pedestal fijo bajo la zona del ítem recompensa (x = 3.6, z = 0.45)
     const rewardObj = room.getObject('reward_item_pickup');
     if (rewardObj) {
       this.buildRewardPedestal(
@@ -134,11 +168,10 @@ export class RoomMeshFactory {
       );
     }
 
-    // 3. Construcción compuesta de los 6 objetos interactivos
+    // 4. Construcción compuesta de los 9 objetos interactivos
     let clueWallHandles: ClueWallVisualHandles | null = null;
+    let deskBoxHandles: DeskBoxVisualHandles | null = null;
     let safeHandles: SafeVisualHandles | null = null;
-    let itemPickupGroup: THREE.Group | null = null;
-    let itemPickupBaseY = 0.95;
     let exitDoorHandles: ExitDoorVisualHandles | null = null;
 
     for (const obj of room.getAllObjects()) {
@@ -149,11 +182,28 @@ export class RoomMeshFactory {
           colliders.push(this.createColliderFromObject(obj));
           break;
         }
+        case 'desk_box': {
+          const built = this.buildDeskBox(room, obj, disposableTextures);
+          deskBoxHandles = built.handles;
+          this.registerInteractiveGroup(built.group, obj, interactiveGroups, rootGroup);
+          colliders.push(this.createColliderFromObject(obj));
+          break;
+        }
+        case 'wall_marking': {
+          const markingGroup = this.buildWallMarking(room, obj, disposableTextures);
+          this.registerInteractiveGroup(markingGroup, obj, interactiveGroups, rootGroup);
+          break;
+        }
         case 'switch_panel': {
-          const { group, levers } = this.buildSwitchPanel(room, obj, disposableTextures);
+          const { group, levers, stepMaterials } = this.buildSwitchPanel(
+            room,
+            obj,
+            disposableTextures
+          );
           for (const lever of levers) {
             switchHandles.set(lever.symbol, lever);
           }
+          switchStepMaterials.push(...stepMaterials);
           this.registerInteractiveGroup(group, obj, interactiveGroups, rootGroup);
           break;
         }
@@ -171,10 +221,13 @@ export class RoomMeshFactory {
           break;
         }
         case 'item_pickup': {
-          itemPickupGroup = this.buildItemPickup(theme, obj);
-          itemPickupBaseY = obj.position.y;
-          itemPickupGroup.visible = obj.isVisible;
-          this.registerInteractiveGroup(itemPickupGroup, obj, interactiveGroups, rootGroup);
+          const pickupGroup = this.buildItemPickup(theme, obj);
+          pickupGroup.visible = obj.isVisible;
+          this.registerInteractiveGroup(pickupGroup, obj, interactiveGroups, rootGroup);
+          itemPickupGroups.set(obj.id, {
+            group: pickupGroup,
+            baseY: obj.position.y,
+          });
           break;
         }
         case 'exit_door': {
@@ -194,11 +247,14 @@ export class RoomMeshFactory {
       rootGroup,
       interactiveGroups,
       switchHandles,
+      switchStepMaterials,
       clueWallHandles,
+      deskBoxHandles,
       safeHandles,
-      itemPickupGroup,
-      itemPickupBaseY,
+      itemPickupGroups,
       exitDoorHandles,
+      blinkingMaterials,
+      energyCableMaterials,
       colliders,
       disposableTextures,
     };
@@ -299,33 +355,101 @@ export class RoomMeshFactory {
       rootGroup.add(beam);
     }
 
-    // Lámpara central colgante del techo
-    const fixtureGroup = new THREE.Group();
-    fixtureGroup.position.set(0, height, 0);
+    // Lámpara central colgante del techo (candelabro en horror / tiras LED en scifi)
+    if (theme === 'horror') {
+      const chandelier = new THREE.Group();
+      chandelier.position.set(0, height, 0);
 
-    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.45, 12), trimMat);
-    rod.position.y = -0.22;
-    fixtureGroup.add(rod);
+      const ironMat = new THREE.MeshStandardMaterial({
+        color: 0x26201c,
+        roughness: 0.45,
+        metalness: 0.85,
+      });
+      const candleMat = new THREE.MeshStandardMaterial({
+        color: 0xf4ead2,
+        roughness: 0.78,
+      });
+      const flameMat = new THREE.MeshStandardMaterial({
+        color: 0xffcf70,
+        emissive: 0xffa630,
+        emissiveIntensity: 2.0,
+        roughness: 0.2,
+      });
 
-    const shade = new THREE.Mesh(
-      theme === 'horror'
-        ? new THREE.ConeGeometry(0.42, 0.25, 16, 1, true)
-        : new THREE.CylinderGeometry(0.46, 0.38, 0.16, 20),
-      trimMat
-    );
-    shade.position.y = -0.46;
-    fixtureGroup.add(shade);
+      const chain = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.025, 0.025, 0.55, 10),
+        ironMat
+      );
+      chain.position.y = -0.275;
+      chandelier.add(chain);
 
-    const bulbMat = new THREE.MeshStandardMaterial({
-      color: room.themeConfiguration.lightingConfig.mainLightColor,
-      emissive: room.themeConfiguration.lightingConfig.mainLightColor,
-      emissiveIntensity: 1.4,
-      roughness: 0.2,
-    });
-    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12), bulbMat);
-    bulb.position.y = -0.5;
-    fixtureGroup.add(bulb);
-    rootGroup.add(fixtureGroup);
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.56, 0.028, 10, 24),
+        ironMat
+      );
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = -0.58;
+      chandelier.add(ring);
+
+      for (let i = 0; i < 6; i += 1) {
+        const angle = (Math.PI * 2 * i) / 6;
+        const cx = Math.cos(angle) * 0.56;
+        const cz = Math.sin(angle) * 0.56;
+
+        const arm = new THREE.Mesh(
+          new THREE.BoxGeometry(0.56, 0.02, 0.025),
+          ironMat
+        );
+        arm.position.set(cx * 0.5, -0.54, cz * 0.5);
+        arm.rotation.y = -angle;
+        chandelier.add(arm);
+
+        const candle = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.025, 0.028, 0.14, 10),
+          candleMat
+        );
+        candle.position.set(cx, -0.49, cz);
+        chandelier.add(candle);
+
+        const flame = new THREE.Mesh(
+          new THREE.SphereGeometry(0.028, 10, 8),
+          flameMat
+        );
+        flame.scale.set(0.8, 1.4, 0.8);
+        flame.position.set(cx, -0.4, cz);
+        chandelier.add(flame);
+      }
+
+      rootGroup.add(chandelier);
+    } else {
+      const stripMat = new THREE.MeshStandardMaterial({
+        color: 0xe6f7ff,
+        emissive: 0xb8ecff,
+        emissiveIntensity: 1.75,
+        roughness: 0.2,
+      });
+      const housingMat = new THREE.MeshStandardMaterial({
+        color: 0x1c2b3b,
+        roughness: 0.35,
+        metalness: 0.78,
+      });
+
+      for (const sx of [-2.3, 0, 2.3]) {
+        const housing = new THREE.Mesh(
+          new THREE.BoxGeometry(0.24, 0.07, 6.8),
+          housingMat
+        );
+        housing.position.set(sx, height - 0.04, 0);
+        rootGroup.add(housing);
+
+        const strip = new THREE.Mesh(
+          new THREE.BoxGeometry(0.14, 0.03, 6.6),
+          stripMat
+        );
+        strip.position.set(sx, height - 0.075, 0);
+        rootGroup.add(strip);
+      }
+    }
   }
 
   private buildRewardPedestal(
@@ -517,7 +641,11 @@ export class RoomMeshFactory {
     room: Room,
     obj: InteractiveObject,
     textures: THREE.Texture[]
-  ): { group: THREE.Group; levers: SwitchVisualHandles[] } {
+  ): {
+    group: THREE.Group;
+    levers: SwitchVisualHandles[];
+    stepMaterials: THREE.MeshStandardMaterial[];
+  } {
     const theme = room.themeConfiguration.themeType;
     const palette = room.themeConfiguration.colorPalette;
     const { width: w, height: h, depth: d } = obj.size;
@@ -557,6 +685,24 @@ export class RoomMeshFactory {
     innerPlate.position.z = d / 2 - 0.01;
     group.add(innerPlate);
 
+    // 5 indicadores LED superiores de secuencia (1..5)
+    const stepMaterials: THREE.MeshStandardMaterial[] = [];
+    for (let s = 0; s < 5; s += 1) {
+      const stepMat = new THREE.MeshStandardMaterial({
+        color: 0x262a30,
+        emissive: 0x000000,
+        emissiveIntensity: 0.2,
+        roughness: 0.3,
+      });
+      const stepLed = new THREE.Mesh(
+        new THREE.BoxGeometry(0.075, 0.045, 0.025),
+        stepMat
+      );
+      stepLed.position.set((s - 2) * 0.11, h / 2 - 0.11, d / 2 + 0.015);
+      group.add(stepLed);
+      stepMaterials.push(stepMat);
+    }
+
     // Conductos superior e inferior
     const conduitGeo = new THREE.CylinderGeometry(0.032, 0.032, 0.65, 10);
     for (const cx of [-0.18, 0.18]) {
@@ -574,7 +720,7 @@ export class RoomMeshFactory {
       const xOffset = (i - 1) * spacing;
 
       const switchModule = new THREE.Group();
-      switchModule.position.set(xOffset, 0, d / 2 + 0.015);
+      switchModule.position.set(xOffset, -0.05, d / 2 + 0.015);
       switchModule.userData.switchSymbol = symbol;
 
       const labelTex = this.textureFactory.createSwitchLabelTexture(symbol, theme);
@@ -594,7 +740,7 @@ export class RoomMeshFactory {
         roughness: 0.25,
       });
       const led = new THREE.Mesh(new THREE.SphereGeometry(0.025, 12, 10), ledMat);
-      led.position.set(0, 0.24, 0.02);
+      led.position.set(0, 0.22, 0.02);
       led.userData.switchSymbol = symbol;
       switchModule.add(led);
 
@@ -641,7 +787,7 @@ export class RoomMeshFactory {
       });
     }
 
-    return { group, levers };
+    return { group, levers, stepMaterials };
   }
 
   private buildClueWall(
@@ -929,8 +1075,868 @@ export class RoomMeshFactory {
     };
   }
 
+  private buildDeskBox(
+    room: Room,
+    obj: InteractiveObject,
+    textures: THREE.Texture[]
+  ): { group: THREE.Group; handles: DeskBoxVisualHandles } {
+    const theme = room.themeConfiguration.themeType;
+    const palette = room.themeConfiguration.colorPalette;
+    const { width: w, height: h, depth: d } = obj.size;
+
+    const surfaceTex = this.textureFactory.createSurfaceDetailTexture(
+      theme,
+      palette.furniturePrimary
+    );
+    const noteTex = this.textureFactory.createDeskBoxNoteTexture(theme);
+    textures.push(surfaceTex, noteTex);
+
+    const bodyMat = new THREE.MeshStandardMaterial({
+      map: surfaceTex,
+      roughness: theme === 'horror' ? 0.68 : 0.34,
+      metalness: theme === 'horror' ? 0.16 : 0.72,
+    });
+    const trimMat = new THREE.MeshStandardMaterial({
+      color: palette.furnitureSecondary,
+      roughness: 0.3,
+      metalness: 0.85,
+    });
+    const lockMat = new THREE.MeshStandardMaterial({
+      color: obj.isLocked ? 0xaa2222 : 0x22cc66,
+      emissive: obj.isLocked ? 0xcc2222 : 0x22ff88,
+      emissiveIntensity: 0.9,
+      roughness: 0.25,
+    });
+    const innerNoteMat = new THREE.MeshStandardMaterial({
+      map: noteTex,
+      roughness: theme === 'horror' ? 0.8 : 0.25,
+      emissive: theme === 'scifi' ? 0x004e64 : 0x000000,
+      emissiveIntensity: theme === 'scifi' ? 0.5 : 0,
+    });
+
+    const group = new THREE.Group();
+
+    const standH = 0.72;
+    const topStand = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, d), bodyMat);
+    topStand.position.y = standH - 0.03;
+    group.add(topStand);
+
+    for (const [lx, lz] of [
+      [-w / 2 + 0.08, -d / 2 + 0.08],
+      [w / 2 - 0.08, -d / 2 + 0.08],
+      [-w / 2 + 0.08, d / 2 - 0.08],
+      [w / 2 - 0.08, d / 2 - 0.08],
+    ]) {
+      const leg = new THREE.Mesh(
+        new THREE.BoxGeometry(0.07, standH - 0.06, 0.07),
+        bodyMat
+      );
+      leg.position.set(lx, (standH - 0.06) / 2, lz);
+      group.add(leg);
+    }
+
+    const boxW = w - 0.12;
+    const boxD = d - 0.1;
+    const boxH = h - standH - 0.04;
+    const wallT = 0.032;
+    const boxBaseY = standH;
+
+    const floorPlate = new THREE.Mesh(
+      new THREE.BoxGeometry(boxW, wallT, boxD),
+      bodyMat
+    );
+    floorPlate.position.y = boxBaseY + wallT / 2;
+    group.add(floorPlate);
+
+    const frontWall = new THREE.Mesh(
+      new THREE.BoxGeometry(boxW, boxH, wallT),
+      bodyMat
+    );
+    frontWall.position.set(0, boxBaseY + boxH / 2, boxD / 2 - wallT / 2);
+    group.add(frontWall);
+
+    const backWall = new THREE.Mesh(
+      new THREE.BoxGeometry(boxW, boxH, wallT),
+      bodyMat
+    );
+    backWall.position.set(0, boxBaseY + boxH / 2, -boxD / 2 + wallT / 2);
+    group.add(backWall);
+
+    const sideLeft = new THREE.Mesh(
+      new THREE.BoxGeometry(wallT, boxH, boxD - wallT * 2),
+      bodyMat
+    );
+    sideLeft.position.set(-boxW / 2 + wallT / 2, boxBaseY + boxH / 2, 0);
+    group.add(sideLeft);
+
+    const sideRight = new THREE.Mesh(
+      new THREE.BoxGeometry(wallT, boxH, boxD - wallT * 2),
+      bodyMat
+    );
+    sideRight.position.set(boxW / 2 - wallT / 2, boxBaseY + boxH / 2, 0);
+    group.add(sideRight);
+
+    const innerNote = new THREE.Mesh(
+      new THREE.BoxGeometry(boxW * 0.68, 0.012, boxD * 0.68),
+      innerNoteMat
+    );
+    innerNote.position.set(0, boxBaseY + wallT + 0.01, 0);
+    group.add(innerNote);
+
+    const interiorLight = new THREE.PointLight(
+      theme === 'horror' ? 0xffbe76 : 0x00f5d4,
+      obj.isLocked ? 0 : 1.0,
+      2.0,
+      2
+    );
+    interiorLight.position.set(0, boxBaseY + boxH + 0.12, 0);
+    group.add(interiorLight);
+
+    const lockPlate = new THREE.Mesh(
+      new THREE.BoxGeometry(0.11, 0.1, 0.028),
+      trimMat
+    );
+    lockPlate.position.set(0, boxBaseY + boxH * 0.72, boxD / 2 + 0.012);
+    group.add(lockPlate);
+
+    const lockIndicator = new THREE.Mesh(
+      new THREE.SphereGeometry(0.022, 10, 10),
+      lockMat
+    );
+    lockIndicator.position.set(0, boxBaseY + boxH * 0.72, boxD / 2 + 0.028);
+    group.add(lockIndicator);
+
+    const lidPivot = new THREE.Group();
+    lidPivot.position.set(0, boxBaseY + boxH, -boxD / 2 + 0.015);
+    if (!obj.isLocked && obj.isActivated) {
+      lidPivot.rotation.x = -THREE.MathUtils.degToRad(100);
+    }
+
+    const lidMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(boxW + 0.02, 0.045, boxD + 0.02),
+      bodyMat
+    );
+    lidMesh.position.set(0, 0.022, boxD / 2 - 0.015);
+    lidPivot.add(lidMesh);
+
+    const lidTrim = new THREE.Mesh(
+      new THREE.BoxGeometry(boxW + 0.03, 0.016, 0.05),
+      trimMat
+    );
+    lidTrim.position.set(0, 0.045, boxD - 0.04);
+    lidPivot.add(lidTrim);
+
+    group.add(lidPivot);
+
+    return {
+      group,
+      handles: {
+        lidPivot,
+        lockMat,
+        interiorLight,
+      },
+    };
+  }
+
+  private buildWallMarking(
+    room: Room,
+    obj: InteractiveObject,
+    textures: THREE.Texture[]
+  ): THREE.Group {
+    const theme = room.themeConfiguration.themeType;
+    const palette = room.themeConfiguration.colorPalette;
+    const { width: w, height: h, depth: d } = obj.size;
+
+    const markTex = this.textureFactory.createWallMarkingTexture(theme);
+    textures.push(markTex);
+
+    const group = new THREE.Group();
+    const frameMat = new THREE.MeshStandardMaterial({
+      color: palette.wallSecondary,
+      roughness: theme === 'horror' ? 0.75 : 0.35,
+      metalness: theme === 'horror' ? 0.2 : 0.75,
+    });
+    const plaqueMat = new THREE.MeshStandardMaterial({
+      map: markTex,
+      roughness: theme === 'horror' ? 0.85 : 0.28,
+      metalness: theme === 'horror' ? 0.05 : 0.3,
+      emissive: theme === 'scifi' ? 0x004e64 : 0x260808,
+      emissiveIntensity: theme === 'scifi' ? 0.35 : 0.15,
+    });
+
+    const backing = new THREE.Mesh(
+      new THREE.BoxGeometry(w, h, d * 0.4),
+      frameMat
+    );
+    backing.position.z = -d * 0.2;
+    group.add(backing);
+
+    const face = new THREE.Mesh(
+      new THREE.PlaneGeometry(w - 0.08, h - 0.08),
+      plaqueMat
+    );
+    face.position.z = d * 0.12;
+    group.add(face);
+
+    const sconceGlowMat = new THREE.MeshStandardMaterial({
+      color: theme === 'horror' ? 0xffb36b : 0x00f5d4,
+      emissive: theme === 'horror' ? 0xff9f43 : 0x00f5d4,
+      emissiveIntensity: 1.5,
+      roughness: 0.2,
+    });
+
+    for (const sx of [-w / 2 - 0.14, w / 2 + 0.14]) {
+      const bracket = new THREE.Mesh(
+        new THREE.BoxGeometry(0.08, 0.22, 0.1),
+        frameMat
+      );
+      bracket.position.set(sx, 0, 0.04);
+      group.add(bracket);
+
+      const emitter = new THREE.Mesh(
+        theme === 'horror'
+          ? new THREE.SphereGeometry(0.04, 10, 8)
+          : new THREE.BoxGeometry(0.04, 0.2, 0.04),
+        sconceGlowMat
+      );
+      emitter.position.set(sx, theme === 'horror' ? 0.14 : 0, 0.09);
+      group.add(emitter);
+    }
+
+    return group;
+  }
+
+  private buildThematicDecor(
+    rootGroup: THREE.Group,
+    room: Room,
+    textures: THREE.Texture[],
+    colliders: ColliderBox2D[],
+    blinkingMaterials: THREE.MeshStandardMaterial[],
+    energyCableMaterials: THREE.MeshStandardMaterial[]
+  ): void {
+    const theme = room.themeConfiguration.themeType;
+    const palette = room.themeConfiguration.colorPalette;
+
+    const woodOrMetalTex = this.textureFactory.createSurfaceDetailTexture(
+      theme,
+      palette.furniturePrimary
+    );
+    const rugTex = this.textureFactory.createRugOrDeckTexture(theme, palette);
+    const windowTex = this.textureFactory.createWindowBackdropTexture(theme);
+    textures.push(woodOrMetalTex, rugTex, windowTex);
+
+    const primaryMat = new THREE.MeshStandardMaterial({
+      map: woodOrMetalTex,
+      roughness: theme === 'horror' ? 0.72 : 0.36,
+      metalness: theme === 'horror' ? 0.14 : 0.74,
+    });
+    const secondaryMat = new THREE.MeshStandardMaterial({
+      color: palette.furnitureSecondary,
+      roughness: 0.32,
+      metalness: 0.82,
+    });
+    const darkTrimMat = new THREE.MeshStandardMaterial({
+      color: palette.wallSecondary,
+      roughness: theme === 'horror' ? 0.75 : 0.4,
+      metalness: theme === 'horror' ? 0.2 : 0.68,
+    });
+
+    const centerMat = new THREE.MeshStandardMaterial({
+      map: rugTex,
+      roughness: theme === 'horror' ? 0.92 : 0.42,
+      metalness: theme === 'horror' ? 0.04 : 0.55,
+    });
+    const centerFloorAccent = new THREE.Mesh(
+      new THREE.PlaneGeometry(4.1, 4.7),
+      centerMat
+    );
+    centerFloorAccent.rotation.x = -Math.PI / 2;
+    centerFloorAccent.position.set(0, 0.008, 0.1);
+    centerFloorAccent.receiveShadow = true;
+    rootGroup.add(centerFloorAccent);
+
+    const windowGroup = new THREE.Group();
+    windowGroup.position.set(-4.94, 2.08, 0.22);
+    windowGroup.rotation.y = Math.PI / 2;
+
+    const glassMat = new THREE.MeshStandardMaterial({
+      map: windowTex,
+      emissiveMap: windowTex,
+      emissive: theme === 'horror' ? 0x6ea8fe : 0x48bfe3,
+      emissiveIntensity: theme === 'horror' ? 0.75 : 0.9,
+      roughness: 0.15,
+    });
+    const windowPane = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 1.9), glassMat);
+    windowGroup.add(windowPane);
+
+    for (const [fx, fy, fw, fh] of [
+      [0, 0.98, 1.66, 0.12],
+      [0, -0.98, 1.66, 0.12],
+      [-0.78, 0, 0.12, 2.0],
+      [0.78, 0, 0.12, 2.0],
+    ] as Array<[number, number, number, number]>) {
+      const bar = new THREE.Mesh(
+        new THREE.BoxGeometry(fw, fh, 0.1),
+        darkTrimMat
+      );
+      bar.position.set(fx, fy, 0.04);
+      windowGroup.add(bar);
+    }
+
+    if (theme === 'horror') {
+      for (const bx of [-0.42, 0, 0.42]) {
+        const rod = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.02, 0.02, 1.9, 8),
+          secondaryMat
+        );
+        rod.position.set(bx, 0, 0.06);
+        windowGroup.add(rod);
+      }
+      const curtainMat = new THREE.MeshStandardMaterial({
+        color: 0x3b1216,
+        roughness: 0.9,
+      });
+      for (const cx of [-0.94, 0.94]) {
+        const curtain = new THREE.Mesh(
+          new THREE.BoxGeometry(0.32, 2.35, 0.12),
+          curtainMat
+        );
+        curtain.position.set(cx, -0.08, 0.08);
+        windowGroup.add(curtain);
+      }
+    } else {
+      const divider = new THREE.Mesh(
+        new THREE.BoxGeometry(1.5, 0.08, 0.08),
+        secondaryMat
+      );
+      divider.position.set(0, 0.1, 0.05);
+      windowGroup.add(divider);
+    }
+    rootGroup.add(windowGroup);
+
+    this.buildNorthwestStation(
+      rootGroup,
+      theme,
+      primaryMat,
+      secondaryMat,
+      colliders
+    );
+
+    const artPlacements: Array<{ pos: [number, number, number]; rotY: number; v: number }> = [
+      { pos: [-1.7, 2.1, -4.92], rotY: 0, v: 0 },
+      { pos: [1.7, 2.1, -4.92], rotY: 0, v: 1 },
+      { pos: [4.92, 2.1, 0.45], rotY: -Math.PI / 2, v: 0 },
+      { pos: [-2.4, 2.1, 4.92], rotY: Math.PI, v: 1 },
+      { pos: [2.4, 2.1, 4.92], rotY: Math.PI, v: 0 },
+    ];
+    for (const art of artPlacements) {
+      const artTex = this.textureFactory.createDecorWallArtTexture(theme, art.v);
+      textures.push(artTex);
+      const artGroup = new THREE.Group();
+      artGroup.position.set(art.pos[0], art.pos[1], art.pos[2]);
+      artGroup.rotation.y = art.rotY;
+
+      const frame = new THREE.Mesh(
+        new THREE.BoxGeometry(0.84, 1.04, 0.05),
+        darkTrimMat
+      );
+      artGroup.add(frame);
+
+      const canvasMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.72, 0.92),
+        new THREE.MeshStandardMaterial({
+          map: artTex,
+          roughness: theme === 'horror' ? 0.78 : 0.3,
+          emissive: theme === 'scifi' ? 0x004e64 : 0x000000,
+          emissiveIntensity: theme === 'scifi' ? 0.35 : 0,
+        })
+      );
+      canvasMesh.position.z = 0.03;
+      artGroup.add(canvasMesh);
+      rootGroup.add(artGroup);
+    }
+
+    if (theme === 'horror') {
+      this.buildHorrorSecondaryProps(rootGroup, primaryMat, secondaryMat, colliders);
+    } else {
+      this.buildSciFiSecondaryProps(
+        rootGroup,
+        room,
+        primaryMat,
+        secondaryMat,
+        colliders,
+        blinkingMaterials,
+        energyCableMaterials
+      );
+    }
+  }
+
+  private buildNorthwestStation(
+    rootGroup: THREE.Group,
+    theme: ThemeType,
+    primaryMat: THREE.MeshStandardMaterial,
+    secondaryMat: THREE.MeshStandardMaterial,
+    colliders: ColliderBox2D[]
+  ): void {
+    const station = new THREE.Group();
+    station.position.set(-3.2, 0, -4.52);
+
+    const w = 1.5;
+    const h = 2.45;
+    const d = 0.54;
+
+    const back = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.05), primaryMat);
+    back.position.set(0, h / 2, -d / 2 + 0.025);
+    station.add(back);
+
+    for (const sx of [-w / 2 + 0.04, w / 2 - 0.04]) {
+      const side = new THREE.Mesh(new THREE.BoxGeometry(0.08, h, d), primaryMat);
+      side.position.set(sx, h / 2, 0);
+      station.add(side);
+    }
+
+    for (const sy of [0.18, 1.07, 1.78, h - 0.05]) {
+      const shelf = new THREE.Mesh(
+        new THREE.BoxGeometry(w - 0.08, 0.06, d),
+        primaryMat
+      );
+      shelf.position.set(0, sy, 0);
+      station.add(shelf);
+    }
+
+    if (theme === 'horror') {
+      const bookColors = [0x6b1d1d, 0x1d4e3e, 0x3b2b52, 0x734b26, 0x263849];
+      for (const rowY of [0.21, 1.81]) {
+        for (let b = 0; b < 9; b += 1) {
+          if (b === 4) continue;
+          const bh = 0.24 + (b % 3) * 0.04;
+          const bookMat = new THREE.MeshStandardMaterial({
+            color: bookColors[b % bookColors.length],
+            roughness: 0.78,
+          });
+          const book = new THREE.Mesh(
+            new THREE.BoxGeometry(0.09, bh, 0.28),
+            bookMat
+          );
+          book.position.set(-0.56 + b * 0.14, rowY + bh / 2, 0.04);
+          station.add(book);
+        }
+      }
+
+      const candle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.032, 0.038, 0.16, 10),
+        new THREE.MeshStandardMaterial({ color: 0xf4ead2, roughness: 0.75 })
+      );
+      candle.position.set(0.46, 1.18, 0.12);
+      station.add(candle);
+
+      const flame = new THREE.Mesh(
+        new THREE.SphereGeometry(0.025, 8, 8),
+        new THREE.MeshStandardMaterial({
+          color: 0xffd166,
+          emissive: 0xff9f1c,
+          emissiveIntensity: 2.0,
+        })
+      );
+      flame.position.set(0.46, 1.28, 0.12);
+      station.add(flame);
+    } else {
+      const pad = new THREE.Mesh(
+        new THREE.BoxGeometry(0.46, 0.03, 0.36),
+        new THREE.MeshStandardMaterial({
+          color: 0x0b2a3c,
+          emissive: 0x00d2ff,
+          emissiveIntensity: 0.5,
+          roughness: 0.25,
+        })
+      );
+      pad.position.set(0, 1.11, 0.16);
+      station.add(pad);
+
+      const ledBar = new THREE.Mesh(
+        new THREE.BoxGeometry(w - 0.24, 0.04, 0.04),
+        new THREE.MeshStandardMaterial({
+          color: 0x72efdd,
+          emissive: 0x00f5d4,
+          emissiveIntensity: 1.4,
+        })
+      );
+      ledBar.position.set(0, 2.34, 0.18);
+      station.add(ledBar);
+
+      for (const tx of [-0.42, 0.38]) {
+        const caseMesh = new THREE.Mesh(
+          new THREE.BoxGeometry(0.36, 0.22, 0.32),
+          secondaryMat
+        );
+        caseMesh.position.set(tx, 1.92, 0.04);
+        station.add(caseMesh);
+      }
+    }
+
+    station.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    rootGroup.add(station);
+
+    colliders.push({
+      id: 'northwest_station',
+      minX: -3.98,
+      maxX: -2.42,
+      minZ: -4.9,
+      maxZ: -4.16,
+      active: true,
+    });
+  }
+
+  private buildHorrorSecondaryProps(
+    rootGroup: THREE.Group,
+    primaryMat: THREE.MeshStandardMaterial,
+    secondaryMat: THREE.MeshStandardMaterial,
+    colliders: ColliderBox2D[]
+  ): void {
+    const lounge = new THREE.Group();
+    lounge.position.set(3.2, 0, -4.25);
+
+    const velvetMat = new THREE.MeshStandardMaterial({
+      color: 0x5c1a22,
+      roughness: 0.85,
+    });
+
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.42, 0.78), velvetMat);
+    seat.position.set(-0.34, 0.28, 0);
+    lounge.add(seat);
+
+    const backrest = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.72, 0.18), velvetMat);
+    backrest.position.set(-0.34, 0.78, -0.3);
+    lounge.add(backrest);
+
+    for (const ax of [-0.71, 0.03]) {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.28, 0.74), velvetMat);
+      arm.position.set(ax, 0.56, 0);
+      lounge.add(arm);
+    }
+
+    const tableTop = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.32, 0.32, 0.05, 16),
+      primaryMat
+    );
+    tableTop.position.set(0.54, 0.64, 0.08);
+    lounge.add(tableTop);
+
+    const tableLeg = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.14, 0.62, 12),
+      primaryMat
+    );
+    tableLeg.position.set(0.54, 0.31, 0.08);
+    lounge.add(tableLeg);
+
+    const candleBase = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.08, 0.06, 12),
+      secondaryMat
+    );
+    candleBase.position.set(0.54, 0.69, 0.08);
+    lounge.add(candleBase);
+
+    const candleStick = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.025, 0.03, 0.18, 10),
+      new THREE.MeshStandardMaterial({ color: 0xf4ead2, roughness: 0.8 })
+    );
+    candleStick.position.set(0.54, 0.81, 0.08);
+    lounge.add(candleStick);
+
+    const candleFlame = new THREE.Mesh(
+      new THREE.SphereGeometry(0.025, 8, 8),
+      new THREE.MeshStandardMaterial({
+        color: 0xffd166,
+        emissive: 0xff9f1c,
+        emissiveIntensity: 2.0,
+      })
+    );
+    candleFlame.position.set(0.54, 0.92, 0.08);
+    lounge.add(candleFlame);
+
+    lounge.traverse((c) => {
+      if (c instanceof THREE.Mesh) {
+        c.castShadow = true;
+        c.receiveShadow = true;
+      }
+    });
+    rootGroup.add(lounge);
+    colliders.push({
+      id: 'horror_lounge',
+      minX: 2.38,
+      maxX: 4.1,
+      minZ: -4.85,
+      maxZ: -3.72,
+      active: true,
+    });
+
+    const trunk = new THREE.Group();
+    trunk.position.set(4.3, 0, 3.85);
+    trunk.rotation.y = -Math.PI / 5;
+
+    const trunkBox = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.5, 0.56), primaryMat);
+    trunkBox.position.y = 0.25;
+    trunk.add(trunkBox);
+
+    const trunkLid = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.28, 0.28, 0.92, 12, 1, false, 0, Math.PI),
+      primaryMat
+    );
+    trunkLid.rotation.z = Math.PI / 2;
+    trunkLid.position.y = 0.5;
+    trunk.add(trunkLid);
+
+    for (const bx of [-0.32, 0.32]) {
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.54, 0.58), secondaryMat);
+      strap.position.set(bx, 0.27, 0);
+      trunk.add(strap);
+    }
+
+    trunk.traverse((c) => {
+      if (c instanceof THREE.Mesh) {
+        c.castShadow = true;
+        c.receiveShadow = true;
+      }
+    });
+    rootGroup.add(trunk);
+    colliders.push({
+      id: 'horror_trunk',
+      minX: 3.72,
+      maxX: 4.88,
+      minZ: 3.3,
+      maxZ: 4.4,
+      active: true,
+    });
+
+    const webMat = new THREE.MeshStandardMaterial({
+      color: 0xbcb8b1,
+      transparent: true,
+      opacity: 0.28,
+      roughness: 0.9,
+      side: THREE.DoubleSide,
+    });
+    for (const [wx, wz, rot] of [
+      [-4.6, -4.6, Math.PI / 4],
+      [4.6, -4.6, -Math.PI / 4],
+      [4.6, 4.6, (-3 * Math.PI) / 4],
+      [-4.6, 4.6, (3 * Math.PI) / 4],
+    ] as Array<[number, number, number]>) {
+      const web = new THREE.Mesh(new THREE.CircleGeometry(0.75, 7, 0, Math.PI / 2), webMat);
+      web.position.set(wx, 3.78, wz);
+      web.rotation.x = Math.PI / 2.6;
+      web.rotation.z = rot;
+      rootGroup.add(web);
+    }
+  }
+
+  private buildSciFiSecondaryProps(
+    rootGroup: THREE.Group,
+    room: Room,
+    primaryMat: THREE.MeshStandardMaterial,
+    secondaryMat: THREE.MeshStandardMaterial,
+    colliders: ColliderBox2D[],
+    blinkingMaterials: THREE.MeshStandardMaterial[],
+    energyCableMaterials: THREE.MeshStandardMaterial[]
+  ): void {
+    const racks = new THREE.Group();
+    racks.position.set(3.2, 0, -4.48);
+
+    const rackBodyMat = new THREE.MeshStandardMaterial({
+      color: 0x162230,
+      roughness: 0.34,
+      metalness: 0.78,
+    });
+
+    for (const rx of [-0.42, 0.42]) {
+      const tower = new THREE.Mesh(new THREE.BoxGeometry(0.74, 2.55, 0.62), rackBodyMat);
+      tower.position.set(rx, 1.275, 0);
+      racks.add(tower);
+
+      for (let row = 0; row < 5; row += 1) {
+        const isAmber = (row + (rx > 0 ? 1 : 0)) % 2 === 0;
+        const ledMat = new THREE.MeshStandardMaterial({
+          color: isAmber ? 0xf4a261 : 0x00f5d4,
+          emissive: isAmber ? 0xff9f1c : 0x00f5d4,
+          emissiveIntensity: 1.1,
+          roughness: 0.2,
+        });
+        blinkingMaterials.push(ledMat);
+
+        const ledStrip = new THREE.Mesh(
+          new THREE.BoxGeometry(0.46, 0.04, 0.03),
+          ledMat
+        );
+        ledStrip.position.set(rx, 0.45 + row * 0.42, 0.31);
+        racks.add(ledStrip);
+      }
+    }
+
+    racks.traverse((c) => {
+      if (c instanceof THREE.Mesh) {
+        c.castShadow = true;
+        c.receiveShadow = true;
+      }
+    });
+    rootGroup.add(racks);
+    colliders.push({
+      id: 'scifi_racks',
+      minX: 2.38,
+      maxX: 4.02,
+      minZ: -4.85,
+      maxZ: -4.05,
+      active: true,
+    });
+
+    const cargo = new THREE.Group();
+    cargo.position.set(4.25, 0, 3.85);
+
+    const crate1 = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.7, 0.78), primaryMat);
+    crate1.position.y = 0.35;
+    cargo.add(crate1);
+
+    const stripeMat = new THREE.MeshStandardMaterial({
+      color: 0xe9c46a,
+      roughness: 0.4,
+      metalness: 0.3,
+    });
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.1, 0.8), stripeMat);
+    stripe.position.y = 0.54;
+    cargo.add(stripe);
+
+    const crate2 = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.46, 0.52), secondaryMat);
+    crate2.position.set(-0.08, 0.93, -0.05);
+    crate2.rotation.y = 0.28;
+    cargo.add(crate2);
+
+    cargo.traverse((c) => {
+      if (c instanceof THREE.Mesh) {
+        c.castShadow = true;
+        c.receiveShadow = true;
+      }
+    });
+    rootGroup.add(cargo);
+    colliders.push({
+      id: 'scifi_cargo',
+      minX: 3.72,
+      maxX: 4.82,
+      minZ: 3.38,
+      maxZ: 4.32,
+      active: true,
+    });
+
+    const pipeMat = new THREE.MeshStandardMaterial({
+      color: 0x3b526b,
+      roughness: 0.32,
+      metalness: 0.85,
+    });
+    for (const px of [-4.86, 4.86]) {
+      const pipe = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.06, 0.06, 9.6, 12),
+        pipeMat
+      );
+      pipe.rotation.x = Math.PI / 2;
+      pipe.position.set(px, 3.52, 0);
+      rootGroup.add(pipe);
+    }
+
+    const seqSolved = Boolean(room.getPuzzle('sequence_puzzle')?.getIsSolved());
+    const cableMat = new THREE.MeshStandardMaterial({
+      color: seqSolved ? 0x00f5d4 : 0x1e3a4c,
+      emissive: seqSolved ? 0x00f5d4 : 0x004e64,
+      emissiveIntensity: seqSolved ? 1.5 : 0.35,
+      roughness: 0.25,
+    });
+    energyCableMaterials.push(cableMat);
+
+    const cableSegments: Array<{ pos: [number, number, number]; size: [number, number, number] }> = [
+      { pos: [-4.88, 2.95, -1.8], size: [0.05, 1.9, 0.06] },
+      { pos: [0, 3.88, -1.8], size: [9.76, 0.05, 0.06] },
+      { pos: [4.88, 2.95, -1.8], size: [0.05, 1.9, 0.06] },
+    ];
+    for (const seg of cableSegments) {
+      const cable = new THREE.Mesh(
+        new THREE.BoxGeometry(seg.size[0], seg.size[1], seg.size[2]),
+        cableMat
+      );
+      cable.position.set(seg.pos[0], seg.pos[1], seg.pos[2]);
+      rootGroup.add(cable);
+    }
+  }
+
   private buildItemPickup(theme: ThemeType, obj: InteractiveObject): THREE.Group {
     const group = new THREE.Group();
+    const itemId = obj.rewardItem?.id ?? '';
+
+    if (itemId === 'service_chip') {
+      const boardMat = new THREE.MeshStandardMaterial({
+        color: 0x0d2b3e,
+        roughness: 0.28,
+        metalness: 0.65,
+        emissive: 0x005f73,
+        emissiveIntensity: 0.55,
+      });
+      const pinMat = new THREE.MeshStandardMaterial({
+        color: 0xffd166,
+        roughness: 0.22,
+        metalness: 0.92,
+      });
+      const glowMat = new THREE.MeshStandardMaterial({
+        color: 0x00f5d4,
+        emissive: 0x00f5d4,
+        emissiveIntensity: 1.4,
+        roughness: 0.18,
+      });
+
+      const pcb = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.022, 0.16), boardMat);
+      group.add(pcb);
+
+      const core = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.032, 0.09), glowMat);
+      core.position.y = 0.012;
+      group.add(core);
+
+      for (let p = -2; p <= 2; p += 1) {
+        const pinFront = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.016, 0.03), pinMat);
+        pinFront.position.set(p * 0.036, 0, 0.09);
+        group.add(pinFront);
+
+        const pinBack = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.016, 0.03), pinMat);
+        pinBack.position.set(p * 0.036, 0, -0.09);
+        group.add(pinBack);
+      }
+      return group;
+    }
+
+    if (itemId === 'brass_drawer_key') {
+      const brassMat = new THREE.MeshStandardMaterial({
+        color: 0xf4c468,
+        roughness: 0.24,
+        metalness: 0.9,
+        emissive: 0x5c3d0c,
+        emissiveIntensity: 0.45,
+      });
+
+      const bow = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.014, 12, 20), brassMat);
+      bow.position.x = -0.08;
+      group.add(bow);
+
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.012, 0.012, 0.17, 10),
+        brassMat
+      );
+      shaft.rotation.z = Math.PI / 2;
+      shaft.position.x = 0.035;
+      group.add(shaft);
+
+      const bit = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.042, 0.014), brassMat);
+      bit.position.set(0.095, -0.022, 0);
+      group.add(bit);
+      return group;
+    }
 
     if (theme === 'horror' || obj.rewardItem?.iconType === 'key') {
       const bronzeMat = new THREE.MeshStandardMaterial({

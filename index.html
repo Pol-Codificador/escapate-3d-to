@@ -3,28 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ESCAPA TO — Escape Room 3D</title>
+    <title>Escápate!! — Escape Room 3D (UNSA · Tecnología de Objetos)</title>
   </head>
   <body>
     <div id="app">
       <div id="scene-container"></div>
-
-      <div id="phase2-overlay">
-        <button id="theme-toggle-btn" type="button" class="theme-switch-btn">
-          Cambiar a Nave Sci-Fi
-        </button>
-
-        <div id="pointer-lock-banner" class="pointer-banner">
-          Haz clic para explorar en 1ra persona (ESC para liberar mouse)
-        </div>
-
-        <div id="crosshair" class="crosshair" aria-hidden="true">+</div>
-
-        <div class="bottom-bar">
-          <div id="interaction-prompt" class="interaction-prompt hidden"></div>
-          <div id="status-line" class="status-line"></div>
-        </div>
-      </div>
+      <div id="ui-root"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
