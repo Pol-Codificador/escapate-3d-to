@@ -1,206 +1,208 @@
+/**
+ * @pattern MVC (Arquitectónico)
+ * @role Bootstrapper (Fase 2 — Vista Previa Jugable 3D)
+ *
+ * Problema de diseño que resuelve:
+ * Ensambla `SceneManager` (Vista 3D) y `GameController` (Controlador MVC) sobre
+ * el DOM mínimo de Fase 2 para probar la exploración FPS, colisiones, raycasting,
+ * cambio en vivo entre temáticas y ejecución/reversión de comandos sin adelantar
+ * el HUD completo ni los modales de la Fase 3.
+ */
+
 import './style.css';
-import { GameManager } from './core/singletons/GameManager';
+import { GameController } from './controller/GameController';
+import type { IObserver } from './core/interfaces/IObserver';
 import type { ThemeType } from './core/interfaces/IThemeFactory';
+import { AudioManager } from './core/singletons/AudioManager';
+import type { GameStateSnapshot } from './core/singletons/GameManager';
+import type { InteractiveObject } from './model/entities/InteractiveObject';
+import type { TimerSnapshot } from './model/GameTimer';
+import { SceneManager } from './view/scene/SceneManager';
 
-interface ThemeSmokeReport {
-  readonly theme: ThemeType;
-  readonly roomTitle: string;
-  readonly observerNotifications: number;
-  readonly undoStepWorked: boolean;
-  readonly clueRevealed: boolean;
-  readonly itemPickedUp: string;
-  readonly exitOpenedByObserver: boolean;
-  readonly finalLifecycleOnEscape: string;
-  readonly criticalTimerTriggered: boolean;
-  readonly criticalFormattedTime: string;
-  readonly restartClonedCleanRoom: boolean;
-  readonly audioPlayedCount: number;
+const viewportEl = document.querySelector<HTMLDivElement>('#viewport-3d');
+const roomTitleEl = document.querySelector<HTMLElement>('#room-title');
+const timerReadoutEl = document.querySelector<HTMLElement>('#timer-readout');
+const toggleThemeBtn = document.querySelector<HTMLButtonElement>('#btn-toggle-theme');
+const pointerBannerEl = document.querySelector<HTMLElement>('#pointer-lock-banner');
+const crosshairEl = document.querySelector<HTMLElement>('#crosshair');
+const promptEl = document.querySelector<HTMLElement>('#interaction-prompt');
+const feedbackEl = document.querySelector<HTMLElement>('#feedback-line');
+
+if (!viewportEl) {
+  throw new Error('No se encontró el contenedor #viewport-3d en index.html.');
 }
 
-function runThemeSmokeTest(theme: ThemeType): ThemeSmokeReport {
-  const gameManager = GameManager.getInstance();
-  const audioManager = gameManager.getAudioManager();
-  const inventory = gameManager.getInventory();
-  const timer = gameManager.getTimer();
+const sceneManager = new SceneManager(viewportEl);
+const controller = new GameController(sceneManager);
+const gameManager = controller.getGameManager();
+const cameraController = sceneManager.getCameraController();
 
-  let observerNotifications = 0;
-  const unsubscribeSpy = {
-    update: (): void => {
-      observerNotifications += 1;
-    },
-  };
-  gameManager.attach(unsubscribeSpy);
+let activeTheme: ThemeType = 'horror';
+let hoveredObject: InteractiveObject | null = null;
+let pinInputBuffer = '';
 
-  const room = gameManager.startGame(theme);
-  const prototype = gameManager.getRoomPrototype();
-  if (!prototype || room === prototype) {
-    throw new Error(`Se esperaba una instancia clonada distinta al prototipo para ${theme}.`);
+function updateThemeButtonLabel(): void {
+  if (!toggleThemeBtn) {
+    return;
   }
-
-  const seqPuzzle = room.getPuzzle('sequence_puzzle');
-  const pinPuzzle = room.getPuzzle('pin_puzzle');
-  const exitPuzzle = room.getPuzzle('exit_puzzle');
-  const clueWall = room.getObject('clue_wall');
-  const rewardPickup = room.getObject('reward_item_pickup');
-
-  if (!seqPuzzle || !pinPuzzle || !exitPuzzle || !clueWall || !rewardPickup) {
-    throw new Error(`Faltan acertijos u objetos requeridos en la sala ${theme}.`);
-  }
-
-  // 1) Verificar SequenceStrategy + popStep() (undoLastStep) + resolución
-  const firstStep = theme === 'horror' ? 'B' : 'C';
-  const secondStep = theme === 'horror' ? 'A' : 'B';
-  const thirdStep = theme === 'horror' ? 'C' : 'A';
-
-  seqPuzzle.attempt(firstStep);
-  seqPuzzle.attempt('WRONG');
-  const undoStepWorked = seqPuzzle.undoLastStep();
-  if (!undoStepWorked) {
-    throw new Error(`undoLastStep() falló en ${theme}.`);
-  }
-  seqPuzzle.attempt(secondStep);
-  const seqSolved = seqPuzzle.attempt(thirdStep);
-
-  if (!seqSolved.isValid || !seqPuzzle.getIsSolved()) {
-    throw new Error(`Acertijo de secuencia no se resolvió en ${theme}.`);
-  }
-
-  const clueRevealed = clueWall.isActivated && !clueWall.isLocked;
-  if (!clueRevealed) {
-    throw new Error(`La pared/proyector de pista no se activó al resolver secuencia en ${theme}.`);
-  }
-
-  // 2) Verificar PinCodeStrategy (fallo + código correcto por temática)
-  const wrongPin = pinPuzzle.attempt('0000');
-  if (wrongPin.isValid) {
-    throw new Error(`PIN inválido fue aceptado en ${theme}.`);
-  }
-
-  const expectedPin = theme === 'horror' ? '4829' : '7391';
-  const pinSolved = pinPuzzle.attempt(expectedPin);
-  if (!pinSolved.isValid || !rewardPickup.isVisible || rewardPickup.isLocked) {
-    throw new Error(`La recompensa no se reveló tras resolver el PIN en ${theme}.`);
-  }
-
-  // 3) Recoger ítem en Inventory (Observer -> AudioManager)
-  const pickedItem = rewardPickup.consumeRewardItem();
-  if (!pickedItem || !inventory.addItem(pickedItem)) {
-    throw new Error(`No se pudo recoger el ítem de recompensa en ${theme}.`);
-  }
-
-  // 4) Resolver acertijo final con el ítem -> ExitDoor (Observer) + GameManager ('won')
-  const selectedItem = inventory.getSelectedItem();
-  if (!selectedItem) {
-    throw new Error(`No hay ítem seleccionado en inventario para ${theme}.`);
-  }
-
-  const exitSolved = exitPuzzle.attempt(selectedItem.id);
-  const exitOpenedByObserver =
-    exitSolved.isValid && !room.exitDoor.isLocked && room.exitDoor.getIsOpen();
-  const finalLifecycleOnEscape = gameManager.getLifecycleState();
-
-  if (!exitOpenedByObserver || finalLifecycleOnEscape !== 'won') {
-    throw new Error(`ExitDoor o GameManager no reaccionaron al escape en ${theme}.`);
-  }
-
-  // 5) Verificar GameTimer crítico (<= 60s) en una partida reiniciada
-  const restartedRoom = gameManager.restartGame();
-  gameManager.update(245); // 300 - 245 = 55s -> estado crítico <= 60s
-  const criticalTimerTriggered = timer.isCritical() && !timer.isExpired();
-  const criticalFormattedTime = timer.getFormattedTime();
-
-  // 6) Verificar que restartGame() entrega una sala limpia clonada del prototipo
-  const restartedFromZero = gameManager.restartGame();
-  const restartClonedCleanRoom =
-    restartedFromZero !== room &&
-    restartedFromZero !== restartedRoom &&
-    restartedFromZero !== prototype &&
-    !restartedFromZero.getPuzzle('sequence_puzzle')?.getIsSolved() &&
-    !restartedFromZero.getPuzzle('pin_puzzle')?.getIsSolved() &&
-    !restartedFromZero.getPuzzle('exit_puzzle')?.getIsSolved() &&
-    restartedFromZero.exitDoor.isLocked &&
-    !restartedFromZero.exitDoor.getIsOpen() &&
-    inventory.getItems().length === 0 &&
-    !prototype.getPuzzle('sequence_puzzle')?.getIsSolved();
-
-  if (!restartClonedCleanRoom) {
-    throw new Error(`restartGame() no restauró una sala limpia vía Prototype.clone() en ${theme}.`);
-  }
-
-  gameManager.detach(unsubscribeSpy);
-  gameManager.returnToMenu();
-
-  return {
-    theme,
-    roomTitle: room.themeConfiguration.narrativeConfig.roomTitle,
-    observerNotifications,
-    undoStepWorked,
-    clueRevealed,
-    itemPickedUp: `${pickedItem.name} (${pickedItem.id})`,
-    exitOpenedByObserver,
-    finalLifecycleOnEscape,
-    criticalTimerTriggered,
-    criticalFormattedTime,
-    restartClonedCleanRoom,
-    audioPlayedCount: audioManager.getPlayedSoundsCount(),
-  };
+  toggleThemeBtn.textContent =
+    activeTheme === 'horror'
+      ? 'Cambiar a Nave Sci-Fi'
+      : 'Cambiar a Mansión de Terror';
 }
 
-function runPhase1SmokeSuite(): ThemeSmokeReport[] {
-  console.group('ESCAPA TO — Smoke Test Fase 1 (Modelo Puro + Patrones GoF)');
-  const reports = [runThemeSmokeTest('horror'), runThemeSmokeTest('scifi')];
-  console.table(reports);
-  console.info('Fase 1 verificada con éxito para ambas temáticas.');
-  console.groupEnd();
-  return reports;
+function renderHoverPrompt(object: InteractiveObject | null): void {
+  if (!promptEl || !crosshairEl) {
+    return;
+  }
+
+  if (!object) {
+    promptEl.classList.add('hidden');
+    promptEl.textContent = '';
+    crosshairEl.classList.remove('active');
+    return;
+  }
+
+  crosshairEl.classList.add('active');
+  promptEl.classList.remove('hidden');
+
+  if (object.kind === 'switch_panel' && !object.isActivated) {
+    promptEl.textContent = `${object.interactionPrompt} (Prueba rápida: teclas 1=A, 2=B, 3=C | Z deshacer)`;
+  } else if (object.kind === 'safe' && object.isLocked) {
+    const bufferDisplay = pinInputBuffer.padEnd(4, '_');
+    promptEl.textContent = `${object.interactionPrompt} (Teclea 4 dígitos: ${bufferDisplay})`;
+  } else {
+    promptEl.textContent = object.interactionPrompt;
+  }
 }
 
-const reports = runPhase1SmokeSuite();
-const appRoot = document.querySelector<HTMLDivElement>('#app');
+const gameObserver: IObserver<GameStateSnapshot> = {
+  update: (snapshot: GameStateSnapshot): void => {
+    if (roomTitleEl && snapshot.roomTitle) {
+      roomTitleEl.textContent = snapshot.roomTitle;
+    }
+    if (
+      feedbackEl &&
+      (snapshot.lifecycleState === 'won' || snapshot.lifecycleState === 'lost')
+    ) {
+      feedbackEl.textContent = snapshot.statusMessage;
+    }
+  },
+};
 
-if (appRoot) {
-  const rowsHtml = reports
-    .map(
-      (report) => `
-      <tr>
-        <td><strong>${report.theme.toUpperCase()}</strong><br><small>${report.roomTitle}</small></td>
-        <td>${report.undoStepWorked ? 'OK' : 'FAIL'}</td>
-        <td>${report.clueRevealed ? 'OK' : 'FAIL'}</td>
-        <td>${report.itemPickedUp}</td>
-        <td>${report.exitOpenedByObserver ? 'Abierta' : 'Cerrada'} (${report.finalLifecycleOnEscape})</td>
-        <td>${report.criticalTimerTriggered ? 'Critico' : 'Normal'} (${report.criticalFormattedTime})</td>
-        <td>${report.restartClonedCleanRoom ? 'OK' : 'FAIL'}</td>
-        <td>${report.observerNotifications} eventos</td>
-      </tr>
-    `
-    )
-    .join('');
+const timerObserver: IObserver<TimerSnapshot> = {
+  update: (snapshot: TimerSnapshot): void => {
+    if (!timerReadoutEl) {
+      return;
+    }
+    timerReadoutEl.textContent = snapshot.formattedTime;
+    timerReadoutEl.classList.toggle('critical', snapshot.isCritical);
+  },
+};
 
-  appRoot.innerHTML = `
-    <main class="phase1-status">
-      <h1>Escápate!! — Fase 1 Verificada (Modelo Puro + Patrones GoF)</h1>
-      <p>
-        Smoke test automático ejecutado sobre <code>HorrorThemeFactory</code> y
-        <code>SciFiThemeFactory</code> (Strategy, Observer, Abstract Factory, Builder, Prototype y Singleton).
-      </p>
-      <table class="smoke-table">
-        <thead>
-          <tr>
-            <th>Temática / Sala</th>
-            <th>Undo Secuencia</th>
-            <th>Pista Revelada</th>
-            <th>Ítem Recompensa</th>
-            <th>Salida (Observer)</th>
-            <th>Timer Crítico (&le; 60s)</th>
-            <th>Reinicio Prototype</th>
-            <th>Notificaciones</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rowsHtml}
-        </tbody>
-      </table>
-      <p class="smoke-hint">Revisa también la consola del navegador para ver el detalle completo.</p>
-    </main>
-  `;
-}
+gameManager.attach(gameObserver);
+gameManager.getTimer().attach(timerObserver);
+
+controller.onHoveredObjectChange((object) => {
+  hoveredObject = object;
+  if (!object || object.kind !== 'safe') {
+    pinInputBuffer = '';
+  }
+  renderHoverPrompt(object);
+});
+
+controller.onFeedbackMessage((message) => {
+  if (feedbackEl) {
+    feedbackEl.textContent = message;
+  }
+});
+
+controller.onObjectInspected((payload) => {
+  if (feedbackEl && payload.noteContent) {
+    feedbackEl.textContent = payload.noteContent.replace(/\n+/g, ' ');
+  }
+});
+
+cameraController.onLockChange((locked) => {
+  pointerBannerEl?.classList.toggle('hidden', locked);
+});
+
+sceneManager.getCanvas().addEventListener('click', () => {
+  AudioManager.getInstance().unlockAudio();
+  if (!cameraController.isLocked()) {
+    cameraController.lock();
+    return;
+  }
+
+  if (hoveredObject) {
+    controller.handleObjectInteraction(hoveredObject.id);
+    renderHoverPrompt(sceneManager.getHoveredObject());
+  }
+});
+
+toggleThemeBtn?.addEventListener('click', (event) => {
+  event.stopPropagation();
+  AudioManager.getInstance().unlockAudio();
+  activeTheme = activeTheme === 'horror' ? 'scifi' : 'horror';
+  pinInputBuffer = '';
+  controller.startNewGame(activeTheme);
+  updateThemeButtonLabel();
+});
+
+window.addEventListener('keydown', (event) => {
+  AudioManager.getInstance().unlockAudio();
+
+  if (event.code === 'KeyE' && hoveredObject) {
+    controller.handleObjectInteraction(hoveredObject.id);
+    renderHoverPrompt(sceneManager.getHoveredObject());
+    return;
+  }
+
+  if (event.code === 'KeyZ') {
+    controller.undoLastAction();
+    renderHoverPrompt(sceneManager.getHoveredObject());
+    return;
+  }
+
+  if (event.code === 'KeyR') {
+    pinInputBuffer = '';
+    controller.restartCurrentGame();
+    renderHoverPrompt(sceneManager.getHoveredObject());
+    return;
+  }
+
+  // Atajos temporales de Fase 2 para probar interruptores y teclado numérico en 3D
+  if (hoveredObject?.kind === 'switch_panel' && !hoveredObject.isActivated) {
+    if (event.key === '1') {
+      controller.submitSwitch('A');
+      return;
+    }
+    if (event.key === '2') {
+      controller.submitSwitch('B');
+      return;
+    }
+    if (event.key === '3') {
+      controller.submitSwitch('C');
+      return;
+    }
+  }
+
+  if (hoveredObject?.kind === 'safe' && hoveredObject.isLocked) {
+    if (/^\d$/.test(event.key)) {
+      pinInputBuffer += event.key;
+      renderHoverPrompt(hoveredObject);
+      if (pinInputBuffer.length === 4) {
+        controller.submitPinCode(pinInputBuffer);
+        pinInputBuffer = '';
+        renderHoverPrompt(sceneManager.getHoveredObject());
+      }
+    } else if (event.code === 'Backspace' && pinInputBuffer.length > 0) {
+      pinInputBuffer = pinInputBuffer.slice(0, -1);
+      renderHoverPrompt(hoveredObject);
+    }
+  }
+});
+
+controller.startNewGame(activeTheme);
+updateThemeButtonLabel();
+controller.startLoop();

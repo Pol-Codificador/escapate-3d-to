@@ -3,10 +3,41 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ESCAPA TO — Escape Room 3D</title>
+    <title>ESCAPA TO — Escape Room 3D (Fase 2)</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div id="viewport-3d" class="viewport-3d"></div>
+
+      <!-- Superposición mínima temporal de Fase 2 (el HUD completo llega en Fase 3) -->
+      <div class="phase2-overlay">
+        <header class="phase2-topbar">
+          <div class="phase2-badge">
+            <strong id="room-title">Cargando sala...</strong>
+            <span id="timer-readout">05:00</span>
+          </div>
+
+          <div class="phase2-actions">
+            <button id="btn-toggle-theme" type="button" class="phase2-btn">
+              Cambiar a Nave Sci-Fi
+            </button>
+          </div>
+        </header>
+
+        <div id="pointer-lock-banner" class="pointer-lock-banner">
+          Haz clic para explorar en 1ra persona (ESC para liberar mouse)
+        </div>
+
+        <div id="crosshair" class="crosshair" aria-hidden="true">+</div>
+
+        <footer class="phase2-bottom">
+          <div id="interaction-prompt" class="interaction-prompt hidden"></div>
+          <div id="feedback-line" class="feedback-line">
+            WASD para caminar · Mouse para mirar · E / Clic para interactuar · Z deshacer · R reiniciar
+          </div>
+        </footer>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

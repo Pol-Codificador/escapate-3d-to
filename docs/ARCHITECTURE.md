@@ -183,11 +183,74 @@ classDiagram
         +getDescription() string
     }
 
-    class CommandInvoker_Fase2 {
-        <<Controlador Fase 2>>
-        -history: ICommand[]
+    class CommandInvoker {
+        -history: CommandHistoryEntry[]
+        -observers: Set~IObserver~
         +executeCommand(cmd: ICommand) void
         +undoLast() boolean
+        +getHistory() CommandHistoryEntry[]
+        +clear() void
+        +attach(observer: IObserver) void
+        +detach(observer: IObserver) void
+        +notify(data: CommandHistorySnapshot) void
+    }
+
+    class InspectObjectCommand {
+        -room: Room
+        -objectId: string
+        +execute() void
+        +undo() void
+        +getDescription() string
+    }
+
+    class ToggleSwitchCommand {
+        -puzzle: Puzzle
+        -switchSymbol: string
+        +execute() void
+        +undo() void
+        +canUndo() boolean
+        +getDescription() string
+    }
+
+    class InputCodeCommand {
+        -puzzle: Puzzle
+        -pinCode: string
+        +execute() void
+        +undo() void
+        +getDescription() string
+    }
+
+    class PickUpItemCommand {
+        -room: Room
+        -inventory: Inventory
+        +execute() void
+        +undo() void
+        +canUndo() boolean
+        +getDescription() string
+    }
+
+    class UseItemCommand {
+        -room: Room
+        -inventory: Inventory
+        +execute() void
+        +undo() void
+        +getDescription() string
+    }
+
+    class GameController {
+        -commandInvoker: CommandInvoker
+        +startNewGame(theme: ThemeType) Room
+        +restartCurrentGame() Room
+        +handleObjectInteraction(objectId: string) void
+        +submitSwitch(symbol: string) ValidationResult
+        +submitPinCode(pin: string) ValidationResult
+        +undoLastAction() boolean
+    }
+
+    class SceneManager {
+        +buildRoomScene(room: Room, timer?: GameTimer) void
+        +update(data: SceneObservableSnapshot) void
+        +updateFrame(deltaSeconds: number) InteractiveObject
     }
 
     IPuzzleValidationStrategy <|.. SequenceStrategy
@@ -198,15 +261,29 @@ classDiagram
     ISubject <|.. Puzzle
     ISubject <|.. GameTimer
     ISubject <|.. Inventory
+    ISubject <|.. CommandInvoker
     IObserver <|.. ExitDoor
     IObserver <|.. AudioManager
+    IObserver <|.. SceneManager
     Puzzle --> ExitDoor : "notifica"
     Puzzle --> AudioManager : "notifica"
+    Puzzle --> SceneManager : "notifica"
     GameTimer --> AudioManager : "notifica"
+    GameTimer --> SceneManager : "notifica"
     Inventory --> AudioManager : "notifica"
 
-    CommandInvoker_Fase2 o--> ICommand : "invoca y revierte"
-    ICommand ..> Puzzle : "opera en Modelo"
+    ICommand <|.. InspectObjectCommand
+    ICommand <|.. ToggleSwitchCommand
+    ICommand <|.. InputCodeCommand
+    ICommand <|.. PickUpItemCommand
+    ICommand <|.. UseItemCommand
+    CommandInvoker o--> ICommand : "invoca y revierte"
+    GameController --> CommandInvoker : "despacha comandos"
+    GameController --> SceneManager : "coordina Vista 3D"
+    ToggleSwitchCommand ..> Puzzle : "opera + popStep()"
+    InputCodeCommand ..> Puzzle : "valida PIN"
+    PickUpItemCommand ..> Inventory : "agrega/remueve item"
+    UseItemCommand ..> Puzzle : "resuelve salida"
 ```
 
 ---
@@ -348,7 +425,7 @@ classDiagram
 | **Arquitectónico** | **MVC** | Modelo (`src/model/`), Vista (`src/view/`), Controlador (`src/controller/`) | Aísla al 100 % las reglas de dominio de Three.js y del DOM para poder probar, clonar y evolucionar cada capa sin acoplamientos. |
 | **Comportamental** | **Observer** | `ISubject<T>`, `IObserver<T>`, `GameTimer`, `Inventory`, `Puzzle`, `Room`, `ExitDoor`, `GameManager`, `AudioManager` | Desacopla la emisión de cambios de estado del Modelo de los múltiples consumidores reactivos (puerta, audio, sala, HUD). |
 | **Comportamental** | **Strategy** | `IPuzzleValidationStrategy`, `Puzzle` (Context), `SequenceStrategy`, `PinCodeStrategy`, `ItemUnlockStrategy` | Permite validar secuencias con `popStep()`, PIN de 4 dígitos o uso de ítems sin condicionales rígidos ni herencia explosiva en `Puzzle`. |
-| **Comportamental** | **Command** | `ICommand` (Fase 0/1) y comandos concretos + Invoker (Fase 2) | Encapsula acciones del jugador como objetos autónomos con historial y soporte nativo de reversión (`undo()`). |
+| **Comportamental** | **Command** | `ICommand`, `CommandInvoker`, `InspectObjectCommand`, `ToggleSwitchCommand`, `InputCodeCommand`, `PickUpItemCommand`, `UseItemCommand` | Encapsula acciones del jugador como objetos autónomos con historial cronológico observable y soporte nativo de reversión (`undo()`). |
 | **Creacional** | **Abstract Factory** | `IThemeFactory`, `HorrorThemeFactory`, `SciFiThemeFactory` | Garantiza familias coherentes de colores, luces, narrativa, audio y acertijos por temática sin `if/switch` en `RoomDirector`. |
 | **Creacional** | **Builder** | `RoomBuilder`, `RoomDirector`, producto `Room` | Separa la construcción paso a paso y el posicionamiento sin solapamientos de una sala 10×4×10 m de su representación final. |
 | **Creacional** | **Prototype** | `IPrototype<T>`, `Room`, `Puzzle`, `InteractiveObject`, `ExitDoor`, `Inventory`, `InventoryItem`, estrategias | Clona profundamente la sala inicial (`roomPrototype.clone()`) para reiniciar partidas al instante sin reconstruir el escenario lógico. |
