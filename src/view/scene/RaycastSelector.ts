@@ -1,88 +1,86 @@
 /**
- * @pattern MVC (Arquitectónico)
- * @role Center-Screen Raycaster & Highlight Selector (Vista 3D)
+ * @pattern MVC (Vista — Selector Espacial por Raycasting)
+ * @role View Raycast Selector
  *
  * Problema de diseño que resuelve:
- * Lanza un `THREE.Raycaster` desde el centro exacto de la pantalla `(0, 0)` con
- * alcance limitado (`3.5` m) para identificar el `InteractiveObject` apuntado
- * por la mira FPS y aplicar/restaurar un resaltado emisivo sutil sobre sus mallas
- * sin modificar el Modelo.
+ * Lanza un `THREE.Raycaster` desde el centro exacto de la cámara FPS (`(0, 0)`) con
+ * alcance limitado (`3.5` m) para detectar el objeto interactivo apuntado y aplicar
+ * un resaltado emisivo sutil sobre sus materiales, restaurándolos al dejar de apuntar.
  */
 
 import * as THREE from 'three';
-import type { InteractiveObject } from '../../model/entities/InteractiveObject';
-import type { Room } from '../../model/entities/Room';
+import type { SwitchLeverSymbol } from '../builders3d/RoomMeshFactory';
+
+/**
+ * Resultado tipado del raycasting en primera persona.
+ */
+export interface RaycastTargetHit {
+  readonly objectId: string;
+  readonly switchSymbol?: SwitchLeverSymbol;
+  readonly distance: number;
+}
 
 interface SavedMaterialEmissive {
+  readonly material: THREE.MeshStandardMaterial;
   readonly emissive: THREE.Color;
   readonly emissiveIntensity: number;
 }
 
 /**
- * Selector por raycasting central con resaltado emisivo reversible.
+ * Selector por raycasting central para objetos interactivos de la escena 3D.
  */
 export class RaycastSelector {
-  public static readonly MAX_INTERACTION_DISTANCE = 3.5;
-  private static readonly CENTER_NDC = new THREE.Vector2(0, 0);
+  public static readonly MAX_DISTANCE = 3.5;
 
   private readonly raycaster: THREE.Raycaster;
-  private interactiveGroups: ReadonlyMap<string, THREE.Group>;
-  private room: Room | null;
-  private highlightColor: THREE.Color;
-  private hoveredObject: InteractiveObject | null;
-  private hoveredGroup: THREE.Group | null;
-  private readonly savedMaterials: Map<
-    THREE.MeshStandardMaterial,
-    SavedMaterialEmissive
-  >;
+  private readonly screenCenter: THREE.Vector2;
+  private readonly highlightColor: THREE.Color;
 
-  constructor() {
+  private highlightedGroup: THREE.Group | null;
+  private savedEmissives: SavedMaterialEmissive[];
+  private currentSelection: RaycastTargetHit | null;
+
+  constructor(highlightHex = 0xff9f43) {
     this.raycaster = new THREE.Raycaster();
-    this.raycaster.far = RaycastSelector.MAX_INTERACTION_DISTANCE;
-    this.interactiveGroups = new Map<string, THREE.Group>();
-    this.room = null;
-    this.highlightColor = new THREE.Color(0xff9f43);
-    this.hoveredObject = null;
-    this.hoveredGroup = null;
-    this.savedMaterials = new Map();
-  }
-
-  /**
-   * Configura los grupos 3D interactivos de la sala actual y el color de resaltado.
-   */
-  public configure(
-    room: Room,
-    interactiveGroups: ReadonlyMap<string, THREE.Group>,
-    highlightHex: number
-  ): void {
-    this.clearHighlight();
-    this.room = room;
-    this.interactiveGroups = interactiveGroups;
+    this.raycaster.near = 0.05;
+    this.raycaster.far = RaycastSelector.MAX_DISTANCE;
+    this.screenCenter = new THREE.Vector2(0, 0);
     this.highlightColor = new THREE.Color(highlightHex);
+
+    this.highlightedGroup = null;
+    this.savedEmissives = [];
+    this.currentSelection = null;
   }
 
   /**
-   * Lanza el rayo desde `(0, 0)`, actualiza el resaltado emisivo y devuelve
-   * el `InteractiveObject` actualmente apuntado (o `null`).
+   * Actualiza el color emisivo de resaltado según la paleta temática activa.
    */
-  public update(camera: THREE.Camera): InteractiveObject | null {
-    if (!this.room || this.interactiveGroups.size === 0) {
-      this.clearHighlight();
-      return null;
-    }
+  public setHighlightColor(highlightHex: number): void {
+    this.highlightColor.setHex(highlightHex);
+  }
 
-    const targets: THREE.Object3D[] = [];
-    for (const group of this.interactiveGroups.values()) {
+  /**
+   * Ejecuta el raycast desde el centro de cámara contra los grupos interactivos visibles.
+   */
+  public update(
+    camera: THREE.Camera,
+    interactiveGroups: Map<string, THREE.Group>
+  ): RaycastTargetHit | null {
+    const visibleGroups: THREE.Object3D[] = [];
+    for (const group of interactiveGroups.values()) {
       if (group.visible) {
-        targets.push(group);
+        visibleGroups.push(group);
       }
     }
 
-    this.raycaster.setFromCamera(RaycastSelector.CENTER_NDC, camera);
-    const intersections = this.raycaster.intersectObjects(targets, true);
+    if (visibleGroups.length === 0) {
+      this.clearHighlight();
+      this.currentSelection = null;
+      return null;
+    }
 
-    let matchedObject: InteractiveObject | null = null;
-    let matchedGroup: THREE.Group | null = null;
+    this.raycaster.setFromCamera(this.screenCenter, camera);
+    const intersections = this.raycaster.intersectObjects(visibleGroups, true);
 
     for (const hit of intersections) {
       const objectId = this.resolveInteractiveObjectId(hit.object);
@@ -90,77 +88,85 @@ export class RaycastSelector {
         continue;
       }
 
-      const modelObj = this.room.getObject(objectId);
-      const group = this.interactiveGroups.get(objectId);
-      if (modelObj && modelObj.isVisible && group && group.visible) {
-        matchedObject = modelObj;
-        matchedGroup = group;
-        break;
+      const targetGroup = interactiveGroups.get(objectId) ?? null;
+      if (!targetGroup || !targetGroup.visible) {
+        continue;
       }
+
+      const switchSymbol = this.resolveSwitchSymbol(hit.object);
+      const result: RaycastTargetHit = {
+        objectId,
+        switchSymbol,
+        distance: hit.distance,
+      };
+
+      if (this.highlightedGroup !== targetGroup) {
+        this.clearHighlight();
+        this.applyHighlight(targetGroup);
+      }
+
+      this.currentSelection = result;
+      return result;
     }
 
-    if (matchedGroup !== this.hoveredGroup) {
-      this.clearHighlight();
-      if (matchedGroup && matchedObject) {
-        this.applyHighlight(matchedGroup);
-        this.hoveredGroup = matchedGroup;
-        this.hoveredObject = matchedObject;
-      }
-    } else if (matchedObject) {
-      // Mantiene sincronizada la referencia al objeto del Modelo.
-      this.hoveredObject = matchedObject;
-    }
-
-    return this.hoveredObject;
-  }
-
-  public getHoveredObject(): InteractiveObject | null {
-    return this.hoveredObject;
+    this.clearHighlight();
+    this.currentSelection = null;
+    return null;
   }
 
   /**
-   * Restaura los materiales emisivos originales del grupo resaltado actual.
+   * Devuelve la selección más reciente obtenida en el frame actual.
+   */
+  public getCurrentSelection(): RaycastTargetHit | null {
+    return this.currentSelection;
+  }
+
+  /**
+   * Restaura inmediatamente los materiales del grupo resaltado actualmente.
    */
   public clearHighlight(): void {
-    for (const [material, saved] of this.savedMaterials.entries()) {
-      material.emissive.copy(saved.emissive);
-      material.emissiveIntensity = saved.emissiveIntensity;
+    for (const saved of this.savedEmissives) {
+      saved.material.emissive.copy(saved.emissive);
+      saved.material.emissiveIntensity = saved.emissiveIntensity;
     }
-    this.savedMaterials.clear();
-    this.hoveredGroup = null;
-    this.hoveredObject = null;
+    this.savedEmissives = [];
+    this.highlightedGroup = null;
   }
 
   private applyHighlight(group: THREE.Group): void {
-    group.traverse((node) => {
-      if (!(node instanceof THREE.Mesh)) {
+    const visitedMaterials = new Set<THREE.MeshStandardMaterial>();
+    const savedList: SavedMaterialEmissive[] = [];
+
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) {
         return;
       }
 
-      const materials = Array.isArray(node.material)
-        ? node.material
-        : [node.material];
+      const materials = Array.isArray(child.material)
+        ? child.material
+        : [child.material];
 
-      for (const material of materials) {
-        if (!(material instanceof THREE.MeshStandardMaterial)) {
+      for (const mat of materials) {
+        if (
+          !(mat instanceof THREE.MeshStandardMaterial) ||
+          visitedMaterials.has(mat)
+        ) {
           continue;
         }
-        if (this.savedMaterials.has(material)) {
-          continue;
-        }
-
-        this.savedMaterials.set(material, {
-          emissive: material.emissive.clone(),
-          emissiveIntensity: material.emissiveIntensity,
+        visitedMaterials.add(mat);
+        savedList.push({
+          material: mat,
+          emissive: mat.emissive.clone(),
+          emissiveIntensity: mat.emissiveIntensity,
         });
 
-        material.emissive.lerp(this.highlightColor, 0.55);
-        material.emissiveIntensity = Math.max(
-          material.emissiveIntensity + 0.25,
-          0.38
-        );
+        mat.emissive.lerp(this.highlightColor, 0.45);
+        mat.emissiveIntensity = Math.min(1.4, mat.emissiveIntensity + 0.32);
       }
     });
+
+    this.highlightedGroup = group;
+    this.savedEmissives = savedList;
   }
 
   private resolveInteractiveObjectId(object: THREE.Object3D): string | null {
@@ -173,5 +179,19 @@ export class RaycastSelector {
       cursor = cursor.parent;
     }
     return null;
+  }
+
+  private resolveSwitchSymbol(
+    object: THREE.Object3D
+  ): SwitchLeverSymbol | undefined {
+    let cursor: THREE.Object3D | null = object;
+    while (cursor) {
+      const symbol = cursor.userData.switchSymbol;
+      if (symbol === 'A' || symbol === 'B' || symbol === 'C') {
+        return symbol;
+      }
+      cursor = cursor.parent;
+    }
+    return undefined;
   }
 }

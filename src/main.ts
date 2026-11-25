@@ -1,208 +1,183 @@
-/**
- * @pattern MVC (Arquitectónico)
- * @role Bootstrapper (Fase 2 — Vista Previa Jugable 3D)
- *
- * Problema de diseño que resuelve:
- * Ensambla `SceneManager` (Vista 3D) y `GameController` (Controlador MVC) sobre
- * el DOM mínimo de Fase 2 para probar la exploración FPS, colisiones, raycasting,
- * cambio en vivo entre temáticas y ejecución/reversión de comandos sin adelantar
- * el HUD completo ni los modales de la Fase 3.
- */
-
 import './style.css';
-import { GameController } from './controller/GameController';
-import type { IObserver } from './core/interfaces/IObserver';
+import { GameController, type HoverTargetInfo } from './controller/GameController';
 import type { ThemeType } from './core/interfaces/IThemeFactory';
-import { AudioManager } from './core/singletons/AudioManager';
 import type { GameStateSnapshot } from './core/singletons/GameManager';
-import type { InteractiveObject } from './model/entities/InteractiveObject';
-import type { TimerSnapshot } from './model/GameTimer';
 import { SceneManager } from './view/scene/SceneManager';
 
-const viewportEl = document.querySelector<HTMLDivElement>('#viewport-3d');
-const roomTitleEl = document.querySelector<HTMLElement>('#room-title');
-const timerReadoutEl = document.querySelector<HTMLElement>('#timer-readout');
-const toggleThemeBtn = document.querySelector<HTMLButtonElement>('#btn-toggle-theme');
-const pointerBannerEl = document.querySelector<HTMLElement>('#pointer-lock-banner');
-const crosshairEl = document.querySelector<HTMLElement>('#crosshair');
-const promptEl = document.querySelector<HTMLElement>('#interaction-prompt');
-const feedbackEl = document.querySelector<HTMLElement>('#feedback-line');
+const sceneContainer = document.querySelector<HTMLDivElement>('#scene-container');
+const themeToggleBtn = document.querySelector<HTMLButtonElement>('#theme-toggle-btn');
+const pointerLockBanner = document.querySelector<HTMLDivElement>('#pointer-lock-banner');
+const crosshairEl = document.querySelector<HTMLDivElement>('#crosshair');
+const interactionPromptEl = document.querySelector<HTMLDivElement>('#interaction-prompt');
+const statusLineEl = document.querySelector<HTMLDivElement>('#status-line');
 
-if (!viewportEl) {
-  throw new Error('No se encontró el contenedor #viewport-3d en index.html.');
+if (
+  !sceneContainer ||
+  !themeToggleBtn ||
+  !pointerLockBanner ||
+  !crosshairEl ||
+  !interactionPromptEl ||
+  !statusLineEl
+) {
+  throw new Error('No se encontraron los elementos base del DOM para inicializar la Fase 2.');
 }
 
-const sceneManager = new SceneManager(viewportEl);
+const sceneManager = new SceneManager(sceneContainer);
 const controller = new GameController(sceneManager);
-const gameManager = controller.getGameManager();
 const cameraController = sceneManager.getCameraController();
+const gameManager = controller.getGameManager();
 
-let activeTheme: ThemeType = 'horror';
-let hoveredObject: InteractiveObject | null = null;
+let currentTheme: ThemeType = 'horror';
+let currentHover: HoverTargetInfo | null = null;
 let pinInputBuffer = '';
 
 function updateThemeButtonLabel(): void {
-  if (!toggleThemeBtn) {
-    return;
-  }
-  toggleThemeBtn.textContent =
-    activeTheme === 'horror'
+  themeToggleBtn!.textContent =
+    currentTheme === 'horror'
       ? 'Cambiar a Nave Sci-Fi'
       : 'Cambiar a Mansión de Terror';
 }
 
-function renderHoverPrompt(object: InteractiveObject | null): void {
-  if (!promptEl || !crosshairEl) {
-    return;
-  }
-
-  if (!object) {
-    promptEl.classList.add('hidden');
-    promptEl.textContent = '';
-    crosshairEl.classList.remove('active');
-    return;
-  }
-
-  crosshairEl.classList.add('active');
-  promptEl.classList.remove('hidden');
-
-  if (object.kind === 'switch_panel' && !object.isActivated) {
-    promptEl.textContent = `${object.interactionPrompt} (Prueba rápida: teclas 1=A, 2=B, 3=C | Z deshacer)`;
-  } else if (object.kind === 'safe' && object.isLocked) {
-    const bufferDisplay = pinInputBuffer.padEnd(4, '_');
-    promptEl.textContent = `${object.interactionPrompt} (Teclea 4 dígitos: ${bufferDisplay})`;
-  } else {
-    promptEl.textContent = object.interactionPrompt;
-  }
+function updateStatusLine(message: string): void {
+  const state = gameManager.getSnapshot();
+  statusLineEl!.textContent = `[${state.remainingFormattedTime}] (${state.solvedCount}/${state.totalPuzzles}) ${message}`;
 }
 
-const gameObserver: IObserver<GameStateSnapshot> = {
-  update: (snapshot: GameStateSnapshot): void => {
-    if (roomTitleEl && snapshot.roomTitle) {
-      roomTitleEl.textContent = snapshot.roomTitle;
-    }
-    if (
-      feedbackEl &&
-      (snapshot.lifecycleState === 'won' || snapshot.lifecycleState === 'lost')
-    ) {
-      feedbackEl.textContent = snapshot.statusMessage;
-    }
-  },
-};
+function renderHoverPrompt(hover: HoverTargetInfo | null): void {
+  currentHover = hover;
 
-const timerObserver: IObserver<TimerSnapshot> = {
-  update: (snapshot: TimerSnapshot): void => {
-    if (!timerReadoutEl) {
-      return;
-    }
-    timerReadoutEl.textContent = snapshot.formattedTime;
-    timerReadoutEl.classList.toggle('critical', snapshot.isCritical);
-  },
-};
-
-gameManager.attach(gameObserver);
-gameManager.getTimer().attach(timerObserver);
-
-controller.onHoveredObjectChange((object) => {
-  hoveredObject = object;
-  if (!object || object.kind !== 'safe') {
+  if (!hover) {
     pinInputBuffer = '';
+    crosshairEl!.classList.remove('active');
+    interactionPromptEl!.classList.add('hidden');
+    interactionPromptEl!.textContent = '';
+    return;
   }
-  renderHoverPrompt(object);
+
+  crosshairEl!.classList.add('active');
+  interactionPromptEl!.classList.remove('hidden');
+
+  if (hover.object.kind === 'switch_panel' && hover.switchSymbol) {
+    const seqSolved = Boolean(
+      gameManager.getCurrentRoom()?.getPuzzle('sequence_puzzle')?.getIsSolved()
+    );
+    interactionPromptEl!.textContent = seqSolved
+      ? hover.object.interactionPrompt
+      : `[E / Click] Accionar interruptor ${hover.switchSymbol} (o teclas 1=A, 2=B, 3=C)`;
+    return;
+  }
+
+  if (hover.object.kind === 'safe' && hover.object.isLocked) {
+    const bufferDisplay = pinInputBuffer.padEnd(4, '_');
+    interactionPromptEl!.textContent = `${hover.object.interactionPrompt} — Teclado 0-9: [${bufferDisplay}]`;
+    return;
+  }
+
+  interactionPromptEl!.textContent = hover.object.interactionPrompt;
+}
+
+controller.setHoverListener((hover) => {
+  renderHoverPrompt(hover);
 });
 
-controller.onFeedbackMessage((message) => {
-  if (feedbackEl) {
-    feedbackEl.textContent = message;
+controller.setInspectionListener((payload) => {
+  if (payload.noteContent) {
+    const singleLine = payload.noteContent.replace(/\s+/g, ' ').trim();
+    updateStatusLine(`${payload.title}: ${singleLine}`);
+    return;
   }
+  updateStatusLine(`${payload.title}: ${payload.message}`);
 });
 
-controller.onObjectInspected((payload) => {
-  if (feedbackEl && payload.noteContent) {
-    feedbackEl.textContent = payload.noteContent.replace(/\n+/g, ' ');
-  }
+gameManager.attach({
+  update: (snapshot: GameStateSnapshot): void => {
+    updateStatusLine(snapshot.statusMessage);
+  },
+});
+
+controller.getCommandInvoker().attach({
+  update: (historySnapshot): void => {
+    if (historySnapshot.eventType === 'undone') {
+      updateStatusLine(historySnapshot.statusMessage);
+    }
+  },
 });
 
 cameraController.onLockChange((locked) => {
-  pointerBannerEl?.classList.toggle('hidden', locked);
+  pointerLockBanner.classList.toggle('hidden', locked);
 });
 
-sceneManager.getCanvas().addEventListener('click', () => {
-  AudioManager.getInstance().unlockAudio();
+sceneManager.getDomElement().addEventListener('click', () => {
   if (!cameraController.isLocked()) {
+    gameManager.getAudioManager().unlockAudio();
     cameraController.lock();
     return;
   }
 
-  if (hoveredObject) {
-    controller.handleObjectInteraction(hoveredObject.id);
-    renderHoverPrompt(sceneManager.getHoveredObject());
+  if (currentHover) {
+    controller.handleObjectInteraction(
+      currentHover.object.id,
+      currentHover.switchSymbol
+    );
+    renderHoverPrompt(currentHover);
   }
 });
 
-toggleThemeBtn?.addEventListener('click', (event) => {
+themeToggleBtn.addEventListener('click', (event) => {
   event.stopPropagation();
-  AudioManager.getInstance().unlockAudio();
-  activeTheme = activeTheme === 'horror' ? 'scifi' : 'horror';
   pinInputBuffer = '';
-  controller.startNewGame(activeTheme);
+  currentTheme = currentTheme === 'horror' ? 'scifi' : 'horror';
   updateThemeButtonLabel();
+  controller.startNewGame(currentTheme);
 });
 
 window.addEventListener('keydown', (event) => {
-  AudioManager.getInstance().unlockAudio();
-
-  if (event.code === 'KeyE' && hoveredObject) {
-    controller.handleObjectInteraction(hoveredObject.id);
-    renderHoverPrompt(sceneManager.getHoveredObject());
+  if (event.code === 'KeyE' && currentHover) {
+    controller.handleObjectInteraction(
+      currentHover.object.id,
+      currentHover.switchSymbol
+    );
+    renderHoverPrompt(currentHover);
     return;
   }
 
   if (event.code === 'KeyZ') {
-    controller.undoLastAction();
-    renderHoverPrompt(sceneManager.getHoveredObject());
+    const undone = controller.undoLastAction();
+    if (!undone) {
+      updateStatusLine('No hay acciones reversibles recientes para deshacer.');
+    }
     return;
   }
 
   if (event.code === 'KeyR') {
     pinInputBuffer = '';
     controller.restartCurrentGame();
-    renderHoverPrompt(sceneManager.getHoveredObject());
     return;
   }
 
-  // Atajos temporales de Fase 2 para probar interruptores y teclado numérico en 3D
-  if (hoveredObject?.kind === 'switch_panel' && !hoveredObject.isActivated) {
-    if (event.key === '1') {
-      controller.submitSwitch('A');
-      return;
-    }
-    if (event.key === '2') {
-      controller.submitSwitch('B');
-      return;
-    }
-    if (event.key === '3') {
-      controller.submitSwitch('C');
-      return;
-    }
+  if (currentHover?.object.kind === 'switch_panel') {
+    if (event.key === '1') controller.submitSwitch('A');
+    if (event.key === '2') controller.submitSwitch('B');
+    if (event.key === '3') controller.submitSwitch('C');
+    return;
   }
 
-  if (hoveredObject?.kind === 'safe' && hoveredObject.isLocked) {
+  if (currentHover?.object.kind === 'safe' && currentHover.object.isLocked) {
     if (/^\d$/.test(event.key)) {
       pinInputBuffer += event.key;
-      renderHoverPrompt(hoveredObject);
-      if (pinInputBuffer.length === 4) {
-        controller.submitPinCode(pinInputBuffer);
+      if (pinInputBuffer.length >= 4) {
+        const pin = pinInputBuffer.slice(0, 4);
         pinInputBuffer = '';
-        renderHoverPrompt(sceneManager.getHoveredObject());
+        controller.submitPinCode(pin);
       }
-    } else if (event.code === 'Backspace' && pinInputBuffer.length > 0) {
+      renderHoverPrompt(currentHover);
+    } else if (event.key === 'Backspace' && pinInputBuffer.length > 0) {
       pinInputBuffer = pinInputBuffer.slice(0, -1);
-      renderHoverPrompt(hoveredObject);
+      renderHoverPrompt(currentHover);
     }
   }
 });
 
-controller.startNewGame(activeTheme);
 updateThemeButtonLabel();
+controller.startNewGame(currentTheme);
 controller.startLoop();

@@ -1,84 +1,87 @@
 /**
- * @pattern MVC (Arquitectónico) + Observer (GoF Comportamental)
+ * @pattern MVC (Vista 3D) + Observer (GoF Comportamental)
  * @role View & ConcreteObserver
  *
  * Problema de diseño que resuelve:
- * Administra el ciclo de renderizado WebGL (`THREE.WebGLRenderer`, escena, niebla,
- * luces temáticas, linterna FPS y animaciones 3D) y observa directamente al Modelo
- * (`Room`, `Puzzle`, `GameTimer`) mediante `IObserver` para revelar pistas UV/holograma,
- * abrir la caja fuerte y la puerta de salida o activar alerta roja cuando quedan `<= 60s`.
+ * Administra la escena Three.js (WebGLRenderer, sombras, iluminación temática, linterna,
+ * Cámara FPS y RaycastSelector) y observa directamente al Modelo (`Puzzle`, `Room`,
+ * `GameTimer`, `GameManager`) para reflejar en 3D la revelación UV/holográfica, la apertura
+ * de la caja fuerte, la visibilidad del ítem, la puerta de salida y la alerta roja crítica.
  */
 
 import * as THREE from 'three';
 import type { IObserver } from '../../core/interfaces/IObserver';
-import type { InteractiveObject } from '../../model/entities/InteractiveObject';
-import type { Room, RoomSnapshot } from '../../model/entities/Room';
+import type { ThemeType } from '../../core/interfaces/IThemeFactory';
+import type { GameStateSnapshot } from '../../core/singletons/GameManager';
 import type { GameTimer, TimerSnapshot } from '../../model/GameTimer';
-import type { Puzzle, PuzzleSnapshot } from '../../model/puzzles/Puzzle';
+import type { Room, RoomSnapshot } from '../../model/entities/Room';
+import type { PuzzleSnapshot } from '../../model/puzzles/Puzzle';
 import { SequenceStrategy } from '../../model/puzzles/strategies/SequenceStrategy';
+import { ProceduralTextureFactory } from '../builders3d/ProceduralTextureFactory';
 import {
   RoomMeshFactory,
-  type BuiltRoom3D,
+  type BuiltRoomSceneAssets,
+  type SwitchLeverSymbol,
 } from '../builders3d/RoomMeshFactory';
 import { CameraController } from './CameraController';
-import { RaycastSelector } from './RaycastSelector';
+import { RaycastSelector, type RaycastTargetHit } from './RaycastSelector';
 
 /**
- * Unión de instantáneas del Modelo observadas por la Vista 3D.
+ * Unión de instantáneas del Modelo observadas por `SceneManager`.
  */
-export type SceneObservableSnapshot =
+export type SceneObservedSnapshot =
   | PuzzleSnapshot
   | RoomSnapshot
-  | TimerSnapshot;
+  | TimerSnapshot
+  | GameStateSnapshot;
 
 /**
- * Gestor principal de la escena 3D FPS en Three.js (capa Vista del MVC).
+ * Gestor principal de la escena 3D y observador reactivo del Modelo.
  */
-export class SceneManager implements IObserver<SceneObservableSnapshot> {
+export class SceneManager implements IObserver<SceneObservedSnapshot> {
   private readonly container: HTMLElement;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
   private readonly cameraController: CameraController;
   private readonly raycastSelector: RaycastSelector;
+  private readonly textureFactory: ProceduralTextureFactory;
   private readonly roomMeshFactory: RoomMeshFactory;
 
-  private readonly ambientLight: THREE.AmbientLight;
-  private readonly hemiLight: THREE.HemisphereLight;
-  private readonly mainPointLight: THREE.PointLight;
-  private readonly flashlight: THREE.SpotLight;
+  private ambientLight: THREE.AmbientLight | null;
+  private hemiLight: THREE.HemisphereLight | null;
+  private mainLight: THREE.PointLight | null;
+  private flashlight: THREE.SpotLight | null;
 
-  private currentRoom: Room | null;
+  private observedRoom: Room | null;
   private observedTimer: GameTimer | null;
-  private observedPuzzles: Puzzle[];
-  private builtRoom: BuiltRoom3D | null;
+  private roomAssets: BuiltRoomSceneAssets | null;
 
   private baseAmbientColor: THREE.Color;
   private baseAmbientIntensity: number;
   private baseMainLightColor: THREE.Color;
   private baseMainLightIntensity: number;
-  private themeFlickerEnabled: boolean;
+  private flickerEnabled: boolean;
 
   private elapsedTime: number;
-  private isCriticalTimerActive: boolean;
-  private targetClueReveal: number;
-  private currentClueReveal: number;
-  private targetSafeOpen: number;
-  private currentSafeOpen: number;
-  private targetDoorOpen: number;
-  private currentDoorOpen: number;
+  private isCriticalAlertActive: boolean;
 
-  private readonly onResizeBound: () => void;
+  private switchTargetAngles: Map<SwitchLeverSymbol, number>;
+  private clueRevealProgressTarget: number;
+  private clueRevealProgressCurrent: number;
+  private safeOpenTarget: number;
+  private safeOpenCurrent: number;
+  private exitOpenTarget: number;
+  private exitOpenCurrent: number;
+
+  private readonly handleResizeBound: () => void;
 
   /**
-   * @param container - Contenedor DOM donde se monta el `<canvas>` de Three.js.
+   * @param container - Elemento HTML donde se monta el `<canvas>` WebGL.
    */
   constructor(container: HTMLElement) {
     this.container = container;
 
-    this.renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      powerPreference: 'high-performance',
-    });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(
       Math.max(1, container.clientWidth),
@@ -87,463 +90,567 @@ export class SceneManager implements IObserver<SceneObservableSnapshot> {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.15;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    const aspect =
+    const initialAspect =
       Math.max(1, container.clientWidth) / Math.max(1, container.clientHeight);
     this.cameraController = new CameraController(
       this.renderer.domElement,
-      aspect
+      initialAspect
     );
     this.raycastSelector = new RaycastSelector();
-    this.roomMeshFactory = new RoomMeshFactory();
+    this.textureFactory = new ProceduralTextureFactory();
+    this.roomMeshFactory = new RoomMeshFactory(this.textureFactory);
 
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
-    this.hemiLight = new THREE.HemisphereLight(0xddeeff, 0x1a1a1a, 0.35);
-    this.mainPointLight = new THREE.PointLight(0xffffff, 1.4, 18, 1.3);
-    this.mainPointLight.position.set(0, 3.45, 0);
-    this.mainPointLight.castShadow = true;
-    this.mainPointLight.shadow.mapSize.set(1024, 1024);
-    this.mainPointLight.shadow.bias = -0.0015;
+    this.ambientLight = null;
+    this.hemiLight = null;
+    this.mainLight = null;
+    this.flashlight = null;
 
-    // Linterna suave acoplada a la cámara del jugador
-    this.flashlight = new THREE.SpotLight(
-      0xfff6e5,
-      1.6,
-      11.5,
-      Math.PI / 5.2,
-      0.55,
-      1.35
-    );
-    this.flashlight.position.set(0, -0.06, 0);
-    this.flashlight.target.position.set(0, -0.06, -1);
-    const camera = this.cameraController.getCamera();
-    camera.add(this.flashlight);
-    camera.add(this.flashlight.target);
-
-    this.scene.add(camera);
-    this.scene.add(this.ambientLight);
-    this.scene.add(this.hemiLight);
-    this.scene.add(this.mainPointLight);
-
-    this.currentRoom = null;
+    this.observedRoom = null;
     this.observedTimer = null;
-    this.observedPuzzles = [];
-    this.builtRoom = null;
+    this.roomAssets = null;
 
-    this.baseAmbientColor = new THREE.Color(0x3a2822);
-    this.baseAmbientIntensity = 0.45;
-    this.baseMainLightColor = new THREE.Color(0xffb36b);
-    this.baseMainLightIntensity = 1.35;
-    this.themeFlickerEnabled = false;
+    this.baseAmbientColor = new THREE.Color(0x222222);
+    this.baseAmbientIntensity = 0.5;
+    this.baseMainLightColor = new THREE.Color(0xffffff);
+    this.baseMainLightIntensity = 1.4;
+    this.flickerEnabled = false;
 
     this.elapsedTime = 0;
-    this.isCriticalTimerActive = false;
-    this.targetClueReveal = 0;
-    this.currentClueReveal = 0;
-    this.targetSafeOpen = 0;
-    this.currentSafeOpen = 0;
-    this.targetDoorOpen = 0;
-    this.currentDoorOpen = 0;
+    this.isCriticalAlertActive = false;
 
-    this.onResizeBound = (): void => {
-      const width = Math.max(1, this.container.clientWidth);
-      const height = Math.max(1, this.container.clientHeight);
-      this.cameraController.setAspect(width / height);
-      this.renderer.setSize(width, height);
+    this.switchTargetAngles = new Map<SwitchLeverSymbol, number>([
+      ['A', -0.45],
+      ['B', -0.45],
+      ['C', -0.45],
+    ]);
+    this.clueRevealProgressTarget = 0;
+    this.clueRevealProgressCurrent = 0;
+    this.safeOpenTarget = 0;
+    this.safeOpenCurrent = 0;
+    this.exitOpenTarget = 0;
+    this.exitOpenCurrent = 0;
+
+    this.setupPlayerFlashlight();
+
+    this.handleResizeBound = (): void => {
+      this.handleResize();
     };
-
-    window.addEventListener('resize', this.onResizeBound);
+    window.addEventListener('resize', this.handleResizeBound);
   }
 
   /**
-   * Construye la escena 3D completa a partir de una `Room` y se suscribe a sus sujetos.
+   * Suscribe `SceneManager` al reloj del Modelo para reaccionar al umbral crítico (`<= 60s`).
    */
-  public buildRoomScene(room: Room, timer?: GameTimer): void {
-    this.detachAllModelObservers();
-    this.raycastSelector.clearHighlight();
+  public bindTimer(timer: GameTimer): void {
+    if (this.observedTimer === timer) {
+      return;
+    }
+    this.observedTimer?.detach(this);
+    this.observedTimer = timer;
+    this.observedTimer.attach(this);
+  }
 
-    if (this.builtRoom) {
-      this.scene.remove(this.builtRoom.rootGroup);
-      this.builtRoom.dispose();
-      this.builtRoom = null;
+  /**
+   * Construye o reconstruye la escena 3D completa a partir de una `Room` del Modelo
+   * y conecta los observadores sobre `Room` y sus `Puzzle`.
+   */
+  public buildRoomScene(room: Room): void {
+    this.clearCurrentRoomScene();
+
+    this.observedRoom = room;
+    room.attach(this);
+    for (const puzzle of room.getAllPuzzles()) {
+      puzzle.attach(this);
     }
 
-    this.currentRoom = room;
-    this.builtRoom = this.roomMeshFactory.build(room);
-    this.scene.add(this.builtRoom.rootGroup);
+    const lighting = room.themeConfiguration.lightingConfig;
+    const palette = room.themeConfiguration.colorPalette;
 
-    const { lightingConfig, colorPalette, themeType } = room.themeConfiguration;
-    this.scene.background = new THREE.Color(lightingConfig.fogColor);
-    this.scene.fog = new THREE.FogExp2(
-      lightingConfig.fogColor,
-      lightingConfig.fogDensity
-    );
+    this.scene.background = new THREE.Color(lighting.fogColor);
+    this.scene.fog = new THREE.FogExp2(lighting.fogColor, lighting.fogDensity);
+    this.raycastSelector.setHighlightColor(palette.interactiveHighlight);
 
-    this.baseAmbientColor = new THREE.Color(lightingConfig.ambientColor);
-    this.baseAmbientIntensity = lightingConfig.ambientIntensity;
-    this.baseMainLightColor = new THREE.Color(lightingConfig.mainLightColor);
-    this.baseMainLightIntensity = lightingConfig.mainLightIntensity;
-    this.themeFlickerEnabled = lightingConfig.flickerEnabled;
+    this.setupRoomLights(room);
 
-    this.ambientLight.color.copy(this.baseAmbientColor);
-    this.ambientLight.intensity = this.baseAmbientIntensity;
-    this.hemiLight.color.copy(this.baseMainLightColor);
-    this.hemiLight.groundColor.setHex(colorPalette.floor);
-    this.mainPointLight.color.copy(this.baseMainLightColor);
-    this.mainPointLight.intensity = this.baseMainLightIntensity;
+    const built = this.roomMeshFactory.buildRoom(room);
+    this.roomAssets = built;
+    this.scene.add(built.rootGroup);
 
-    this.flashlight.color.setHex(themeType === 'horror' ? 0xffe4b5 : 0xd8f8ff);
-    this.flashlight.intensity = themeType === 'horror' ? 1.85 : 1.25;
-
-    this.cameraController.setRoomBounds(
-      room.dimensions,
-      this.builtRoom.colliders
+    this.cameraController.configureBounds(
+      room.dimensions.width,
+      room.dimensions.depth,
+      built.colliders
     );
     this.cameraController.resetPose();
 
-    this.raycastSelector.configure(
-      room,
-      this.builtRoom.interactiveGroups,
-      colorPalette.interactiveHighlight
-    );
+    // Sincronizar estado inicial de acertijos y objetos
+    this.isCriticalAlertActive = false;
+    this.elapsedTime = 0;
 
-    this.resetAnimationTargetsFromRoom(room);
-    this.attachModelObservers(room, timer);
+    const seqPuzzle = room.getPuzzle('sequence_puzzle');
+    const pinPuzzle = room.getPuzzle('pin_puzzle');
+    const exitPuzzle = room.getPuzzle('exit_puzzle');
+
+    const seqSolved = Boolean(seqPuzzle?.getIsSolved());
+    this.clueRevealProgressTarget = seqSolved ? 1 : 0;
+    this.clueRevealProgressCurrent = this.clueRevealProgressTarget;
+    this.syncSwitchPanelVisuals(room);
+
+    const pinSolved = Boolean(pinPuzzle?.getIsSolved());
+    this.safeOpenTarget = pinSolved ? 1 : 0;
+    this.safeOpenCurrent = this.safeOpenTarget;
+
+    const exitSolved = Boolean(exitPuzzle?.getIsSolved() || room.exitDoor.getIsOpen());
+    this.exitOpenTarget = exitSolved ? 1 : 0;
+    this.exitOpenCurrent = this.exitOpenTarget;
+    this.cameraController.setColliderActive('exit_door', !exitSolved);
   }
 
   /**
-   * Reacciona de forma desacoplada a eventos de `Puzzle`, `Room` y `GameTimer`.
+   * Reacciona automáticamente a cambios emitidos por `Puzzle`, `Room`, `GameTimer` o `GameManager`.
    */
-  public update(data: SceneObservableSnapshot): void {
+  public update(data: SceneObservedSnapshot): void {
+    if ('remainingSeconds' in data) {
+      this.handleTimerSnapshot(data);
+      return;
+    }
+
     if ('puzzleId' in data) {
       this.handlePuzzleSnapshot(data);
       return;
     }
 
-    if ('remainingSeconds' in data) {
-      this.isCriticalTimerActive =
-        data.isCritical && data.isRunning && !data.isExpired;
+    if ('isExitOpen' in data) {
+      this.handleRoomSnapshot(data);
       return;
     }
 
-    if ('isExitOpen' in data) {
-      this.syncItemPickupVisibility();
-      if (data.isExitOpen) {
-        this.applyExitDoorUnlockedState();
-      }
+    if ('lifecycleState' in data && data.lifecycleState === 'menu') {
+      this.isCriticalAlertActive = false;
     }
   }
 
   /**
-   * Avanza física FPS, animaciones suaves, raycasting y renderiza el frame actual.
+   * Avanza animaciones 3D, física de cámara, raycasting y renderiza el frame actual.
    */
-  public updateFrame(deltaSeconds: number): InteractiveObject | null {
+  public renderFrame(deltaSeconds: number): RaycastTargetHit | null {
     this.elapsedTime += deltaSeconds;
     this.cameraController.update(deltaSeconds);
-
-    this.updateLightingEffects();
     this.updateAnimations(deltaSeconds);
 
-    const hovered = this.raycastSelector.update(
-      this.cameraController.getCamera()
-    );
-    this.renderer.render(this.scene, this.cameraController.getCamera());
-    return hovered;
+    const hit = this.roomAssets
+      ? this.raycastSelector.update(
+          this.cameraController.camera,
+          this.roomAssets.interactiveGroups
+        )
+      : null;
+
+    this.renderer.render(this.scene, this.cameraController.camera);
+    return hit;
   }
 
   public getCameraController(): CameraController {
     return this.cameraController;
   }
 
-  public getHoveredObject(): InteractiveObject | null {
-    return this.raycastSelector.getHoveredObject();
+  public getRaycastSelection(): RaycastTargetHit | null {
+    return this.raycastSelector.getCurrentSelection();
   }
 
-  public getCanvas(): HTMLCanvasElement {
+  public getDomElement(): HTMLCanvasElement {
     return this.renderer.domElement;
   }
 
-  /**
-   * Libera recursos WebGL, listeners y suscripciones Observer.
-   */
   public dispose(): void {
-    window.removeEventListener('resize', this.onResizeBound);
-    this.detachAllModelObservers();
-    this.raycastSelector.clearHighlight();
+    window.removeEventListener('resize', this.handleResizeBound);
+    this.observedTimer?.detach(this);
+    this.clearCurrentRoomScene();
     this.cameraController.dispose();
-
-    if (this.builtRoom) {
-      this.scene.remove(this.builtRoom.rootGroup);
-      this.builtRoom.dispose();
-      this.builtRoom = null;
-    }
-
     this.renderer.dispose();
-    if (this.renderer.domElement.parentElement === this.container) {
-      this.container.removeChild(this.renderer.domElement);
-    }
+    this.renderer.domElement.remove();
   }
 
-  private attachModelObservers(room: Room, timer?: GameTimer): void {
-    room.attach(this);
-    this.observedPuzzles = [...room.getAllPuzzles()];
-    for (const puzzle of this.observedPuzzles) {
-      puzzle.attach(this);
-    }
+  private handleTimerSnapshot(snapshot: TimerSnapshot): void {
+    this.isCriticalAlertActive =
+      snapshot.isCritical && snapshot.isRunning && !snapshot.isExpired;
 
-    if (timer) {
-      this.observedTimer = timer;
-      timer.attach(this);
-      const snapshot = timer.getSnapshot();
-      this.isCriticalTimerActive =
-        snapshot.isCritical && snapshot.isRunning && !snapshot.isExpired;
+    if (!this.isCriticalAlertActive && this.ambientLight && this.mainLight) {
+      this.ambientLight.color.copy(this.baseAmbientColor);
+      this.ambientLight.intensity = this.baseAmbientIntensity;
+      this.mainLight.color.copy(this.baseMainLightColor);
+      this.mainLight.intensity = this.baseMainLightIntensity;
     }
-  }
-
-  private detachAllModelObservers(): void {
-    if (this.currentRoom) {
-      this.currentRoom.detach(this);
-    }
-    for (const puzzle of this.observedPuzzles) {
-      puzzle.detach(this);
-    }
-    this.observedPuzzles = [];
-
-    if (this.observedTimer) {
-      this.observedTimer.detach(this);
-      this.observedTimer = null;
-    }
-  }
-
-  private resetAnimationTargetsFromRoom(room: Room): void {
-    const seqSolved = room.getPuzzle('sequence_puzzle')?.getIsSolved() ?? false;
-    const pinSolved = room.getPuzzle('pin_puzzle')?.getIsSolved() ?? false;
-    const exitSolved = room.getPuzzle('exit_puzzle')?.getIsSolved() ?? false;
-
-    this.targetClueReveal = seqSolved ? 1 : 0;
-    this.currentClueReveal = this.targetClueReveal;
-    this.targetSafeOpen = pinSolved ? 1 : 0;
-    this.currentSafeOpen = this.targetSafeOpen;
-    this.targetDoorOpen = exitSolved ? 1 : 0;
-    this.currentDoorOpen = this.targetDoorOpen;
-    this.isCriticalTimerActive = false;
-
-    this.syncSwitchPanelRig();
-    this.syncClueWallImmediate(seqSolved);
-    this.syncSafeLed(pinSolved);
-    this.syncItemPickupVisibility();
-    if (exitSolved) {
-      this.applyExitDoorUnlockedState();
-    }
-    this.applyAnimatedTransforms();
   }
 
   private handlePuzzleSnapshot(snapshot: PuzzleSnapshot): void {
-    // Limpia temporalmente el resaltado emisivo para evitar sobrescribir LEDs nuevos
-    this.raycastSelector.clearHighlight();
+    if (!this.observedRoom || !this.roomAssets) {
+      return;
+    }
 
     if (snapshot.puzzleId === 'sequence_puzzle') {
-      this.syncSwitchPanelRig();
+      this.syncSwitchPanelVisuals(this.observedRoom);
+
       if (snapshot.isSolved) {
-        this.targetClueReveal = 1;
-        this.syncClueWallImmediate(true);
-      } else if (snapshot.eventType === 'reset') {
-        this.targetClueReveal = 0;
-        this.syncClueWallImmediate(false);
+        this.clueRevealProgressTarget = 1;
+        this.revealClueWallTexture(
+          this.observedRoom.themeConfiguration.themeType,
+          true
+        );
       }
       return;
     }
 
-    if (snapshot.puzzleId === 'pin_puzzle') {
-      if (snapshot.isSolved) {
-        this.targetSafeOpen = 1;
-        this.syncSafeLed(true);
-        this.syncItemPickupVisibility();
-      } else if (snapshot.eventType === 'reset') {
-        this.targetSafeOpen = 0;
-        this.syncSafeLed(false);
-        this.syncItemPickupVisibility();
-      }
+    if (snapshot.puzzleId === 'pin_puzzle' && snapshot.isSolved) {
+      this.safeOpenTarget = 1;
+      this.updateSafeUnlockedVisuals(this.observedRoom.themeConfiguration.themeType);
+      this.syncItemPickupVisibility();
       return;
     }
 
     if (snapshot.puzzleId === 'exit_puzzle' && snapshot.isSolved) {
-      this.applyExitDoorUnlockedState();
+      this.exitOpenTarget = 1;
+      this.updateExitDoorIndicator(true);
+      this.cameraController.setColliderActive('exit_door', false);
     }
   }
 
-  private syncSwitchPanelRig(): void {
-    if (!this.builtRoom?.switchPanelRig || !this.currentRoom) {
+  private handleRoomSnapshot(snapshot: RoomSnapshot): void {
+    this.syncItemPickupVisibility();
+    if (snapshot.isExitOpen) {
+      this.exitOpenTarget = 1;
+      this.updateExitDoorIndicator(true);
+      this.cameraController.setColliderActive('exit_door', false);
+    }
+  }
+
+  private syncSwitchPanelVisuals(room: Room): void {
+    if (!this.roomAssets) {
       return;
     }
 
-    const seqPuzzle = this.currentRoom.getPuzzle('sequence_puzzle');
-    const strategy = seqPuzzle?.getStrategy();
-    const isSolved = seqPuzzle?.getIsSolved() ?? false;
+    this.raycastSelector.clearHighlight();
+    const puzzle = room.getPuzzle('sequence_puzzle');
+    const isSolved = Boolean(puzzle?.getIsSolved());
+    const strategy = puzzle?.getStrategy();
     const activeSteps =
-      strategy instanceof SequenceStrategy
-        ? new Set(strategy.getCurrentSequence())
-        : new Set<string>();
+      strategy instanceof SequenceStrategy ? strategy.getCurrentSequence() : [];
 
-    for (const [symbol, lever] of this.builtRoom.switchPanelRig.levers.entries()) {
-      const isActive = isSolved || activeSteps.has(symbol);
-      lever.pivot.rotation.x = isActive ? -0.45 : 0.45;
+    for (const [symbol, handle] of this.roomAssets.switchHandles.entries()) {
+      const active = isSolved || activeSteps.includes(symbol);
+      this.switchTargetAngles.set(symbol, active ? 0.45 : -0.45);
 
       if (isSolved) {
-        lever.ledMaterial.color.setHex(0x22c55e);
-        lever.ledMaterial.emissive.setHex(0x22c55e);
-        lever.ledMaterial.emissiveIntensity = 1.5;
-      } else if (isActive) {
-        lever.ledMaterial.color.setHex(0xfbbf24);
-        lever.ledMaterial.emissive.setHex(0xf59e0b);
-        lever.ledMaterial.emissiveIntensity = 1.3;
+        handle.ledMaterial.color.setHex(0x1b6e3c);
+        handle.ledMaterial.emissive.setHex(0x22ee77);
+        handle.ledMaterial.emissiveIntensity = 1.25;
+      } else if (active) {
+        handle.ledMaterial.color.setHex(0x8c6d1f);
+        handle.ledMaterial.emissive.setHex(0xffc300);
+        handle.ledMaterial.emissiveIntensity = 1.1;
       } else {
-        lever.ledMaterial.color.setHex(0xff3b30);
-        lever.ledMaterial.emissive.setHex(0xff2a1f);
-        lever.ledMaterial.emissiveIntensity = 0.85;
+        handle.ledMaterial.color.setHex(0x3b1818);
+        handle.ledMaterial.emissive.setHex(0xaa2222);
+        handle.ledMaterial.emissiveIntensity = 0.5;
       }
     }
   }
 
-  private syncClueWallImmediate(revealed: boolean): void {
-    const rig = this.builtRoom?.clueWallRig;
-    if (!rig) {
+  private revealClueWallTexture(theme: ThemeType, revealed: boolean): void {
+    const handles = this.roomAssets?.clueWallHandles;
+    if (!handles) {
       return;
     }
 
-    rig.displayMaterial.map = revealed ? rig.revealedTexture : rig.hiddenTexture;
-    rig.displayMaterial.emissiveIntensity = revealed ? 0.72 : 0;
-    rig.displayMaterial.needsUpdate = true;
-    rig.fixtureBulbMaterial.emissiveIntensity = revealed ? 1.8 : 0;
+    this.raycastSelector.clearHighlight();
+
+    const oldMap = handles.panelMaterial.map;
+    const newTexture = this.textureFactory.createClueWallTexture(
+      theme,
+      handles.secretPin,
+      revealed
+    );
+    this.roomAssets?.disposableTextures.push(newTexture);
+
+    handles.panelMaterial.map = newTexture;
+    handles.panelMaterial.emissiveMap = newTexture;
+    handles.panelMaterial.emissive.setHex(
+      revealed ? (theme === 'horror' ? 0x9d4edd : 0x00f5d4) : 0x000000
+    );
+    handles.panelMaterial.emissiveIntensity = revealed ? 0.72 : 0;
+    handles.panelMaterial.needsUpdate = true;
+    oldMap?.dispose();
   }
 
-  private syncSafeLed(unlocked: boolean): void {
-    const rig = this.builtRoom?.safeRig;
-    if (!rig) {
+  private updateSafeUnlockedVisuals(theme: ThemeType): void {
+    const safeHandles = this.roomAssets?.safeHandles;
+    if (!safeHandles) {
       return;
     }
 
-    if (unlocked) {
-      rig.statusLedMaterial.color.setHex(0x22c55e);
-      rig.statusLedMaterial.emissive.setHex(0x22c55e);
-      rig.statusLedMaterial.emissiveIntensity = 1.4;
-    } else {
-      rig.statusLedMaterial.color.setHex(0xff3b30);
-      rig.statusLedMaterial.emissive.setHex(0xff2a1f);
-      rig.statusLedMaterial.emissiveIntensity = 1.0;
-    }
+    this.raycastSelector.clearHighlight();
+
+    const oldKeypadMap = safeHandles.keypadMaterial.map;
+    const openKeypadTex = this.textureFactory.createKeypadTexture(theme, true);
+    this.roomAssets?.disposableTextures.push(openKeypadTex);
+
+    safeHandles.keypadMaterial.map = openKeypadTex;
+    safeHandles.keypadMaterial.needsUpdate = true;
+    oldKeypadMap?.dispose();
+
+    safeHandles.statusLedMaterial.color.setHex(0x22cc66);
+    safeHandles.statusLedMaterial.emissive.setHex(0x22ff88);
+    safeHandles.interiorLight.intensity = 1.2;
   }
 
   private syncItemPickupVisibility(): void {
-    if (!this.builtRoom || !this.currentRoom) {
+    if (!this.observedRoom || !this.roomAssets?.itemPickupGroup) {
       return;
     }
-
-    const pickupModel = this.currentRoom.getObject('reward_item_pickup');
-    const pickupGroup = this.builtRoom.interactiveGroups.get('reward_item_pickup');
-    if (pickupModel && pickupGroup) {
-      pickupGroup.visible = pickupModel.isVisible;
+    const pickupObj = this.observedRoom.getObject('reward_item_pickup');
+    const shouldShow = Boolean(pickupObj?.isVisible);
+    if (!shouldShow && this.raycastSelector.getCurrentSelection()?.objectId === 'reward_item_pickup') {
+      this.raycastSelector.clearHighlight();
     }
+    this.roomAssets.itemPickupGroup.visible = shouldShow;
   }
 
-  private applyExitDoorUnlockedState(): void {
-    this.targetDoorOpen = 1;
-    const rig = this.builtRoom?.exitDoorRig;
-    if (!rig) {
+  private updateExitDoorIndicator(isOpen: boolean): void {
+    const handles = this.roomAssets?.exitDoorHandles;
+    if (!handles) {
       return;
     }
 
-    rig.indicatorMaterial.color.setHex(0x22c55e);
-    rig.indicatorMaterial.emissive.setHex(0x22c55e);
-    rig.indicatorMaterial.emissiveIntensity = 1.8;
-    rig.indicatorLight.color.setHex(0x22c55e);
-    rig.indicatorLight.intensity = 1.3;
-  }
-
-  private updateLightingEffects(): void {
-    let flickerFactor = 1;
-    if (this.themeFlickerEnabled) {
-      flickerFactor =
-        0.95 +
-        Math.sin(this.elapsedTime * 7.5) * 0.03 +
-        Math.sin(this.elapsedTime * 19.3) * 0.02;
-    }
-
-    if (this.isCriticalTimerActive) {
-      const pulse = 0.5 + 0.5 * Math.sin(this.elapsedTime * 6.5);
-      const redAlert = new THREE.Color(0xc9182b);
-
-      this.ambientLight.color
-        .copy(this.baseAmbientColor)
-        .lerp(redAlert, 0.35 + pulse * 0.35);
-      this.ambientLight.intensity = this.baseAmbientIntensity * (0.9 + pulse * 0.35);
-
-      this.mainPointLight.color
-        .copy(this.baseMainLightColor)
-        .lerp(redAlert, 0.3 + pulse * 0.45);
-      this.mainPointLight.intensity =
-        this.baseMainLightIntensity * flickerFactor * (0.78 + pulse * 0.42);
-      return;
-    }
-
-    this.ambientLight.color.copy(this.baseAmbientColor);
-    this.ambientLight.intensity = this.baseAmbientIntensity;
-    this.mainPointLight.color.copy(this.baseMainLightColor);
-    this.mainPointLight.intensity = this.baseMainLightIntensity * flickerFactor;
+    this.raycastSelector.clearHighlight();
+    handles.statusLightMaterial.color.setHex(isOpen ? 0x22ee77 : 0xee3333);
+    handles.statusLightMaterial.emissive.setHex(isOpen ? 0x22ff88 : 0xff2222);
+    handles.statusPointLight.color.setHex(isOpen ? 0x22ff88 : 0xff3333);
   }
 
   private updateAnimations(deltaSeconds: number): void {
-    const smoothRate = Math.min(1, deltaSeconds * 4.5);
-
-    this.currentClueReveal +=
-      (this.targetClueReveal - this.currentClueReveal) * smoothRate;
-    this.currentSafeOpen +=
-      (this.targetSafeOpen - this.currentSafeOpen) * smoothRate;
-    this.currentDoorOpen +=
-      (this.targetDoorOpen - this.currentDoorOpen) * smoothRate;
-
-    this.applyAnimatedTransforms();
-
-    const itemRig = this.builtRoom?.itemPickupRig;
-    if (itemRig && itemRig.rootGroup.visible) {
-      itemRig.floatingMesh.rotation.y += deltaSeconds * 1.45;
-      itemRig.floatingMesh.position.y =
-        itemRig.baseLocalY + Math.sin(this.elapsedTime * 2.8) * 0.035;
-    }
-  }
-
-  private applyAnimatedTransforms(): void {
-    if (!this.builtRoom) {
+    if (!this.roomAssets) {
       return;
     }
 
-    if (this.builtRoom.clueWallRig) {
-      this.builtRoom.clueWallRig.revealLight.intensity =
-        this.currentClueReveal * 3.6;
+    const lerpFactor = Math.min(1, deltaSeconds * 6);
+
+    // 1. Palancas del panel de interruptores
+    for (const [symbol, handle] of this.roomAssets.switchHandles.entries()) {
+      const targetAngle = this.switchTargetAngles.get(symbol) ?? -0.45;
+      handle.leverPivot.rotation.x = THREE.MathUtils.lerp(
+        handle.leverPivot.rotation.x,
+        targetAngle,
+        Math.min(1, deltaSeconds * 10)
+      );
     }
 
-    if (this.builtRoom.safeRig) {
-      const openAngle = (-105 * Math.PI) / 180;
-      this.builtRoom.safeRig.doorPivot.rotation.y =
-        this.currentSafeOpen * openAngle;
+    // 2. Luz UV / Holograma de clue_wall
+    if (this.roomAssets.clueWallHandles) {
+      this.clueRevealProgressCurrent = THREE.MathUtils.lerp(
+        this.clueRevealProgressCurrent,
+        this.clueRevealProgressTarget,
+        lerpFactor
+      );
+      this.roomAssets.clueWallHandles.spotLight.intensity =
+        3.6 * this.clueRevealProgressCurrent;
+      this.roomAssets.clueWallHandles.accentPointLight.intensity =
+        1.25 * this.clueRevealProgressCurrent;
     }
 
-    const doorRig = this.builtRoom.exitDoorRig;
-    if (doorRig) {
-      if (doorRig.mode === 'pivot') {
-        const leafAngle = (100 * Math.PI) / 180;
-        doorRig.leftLeaf.rotation.y = -this.currentDoorOpen * leafAngle;
-        doorRig.rightLeaf.rotation.y = this.currentDoorOpen * leafAngle;
+    // 3. Apertura de puerta de caja fuerte (~105 grados hacia afuera)
+    if (this.roomAssets.safeHandles) {
+      this.safeOpenCurrent = THREE.MathUtils.lerp(
+        this.safeOpenCurrent,
+        this.safeOpenTarget,
+        lerpFactor
+      );
+      this.roomAssets.safeHandles.doorPivot.rotation.y =
+        -THREE.MathUtils.degToRad(105) * this.safeOpenCurrent;
+    }
+
+    // 4. Rotación y flotación suave del ítem de recompensa cuando está visible
+    if (
+      this.roomAssets.itemPickupGroup &&
+      this.roomAssets.itemPickupGroup.visible
+    ) {
+      this.roomAssets.itemPickupGroup.rotation.y += deltaSeconds * 1.4;
+      this.roomAssets.itemPickupGroup.position.y =
+        this.roomAssets.itemPickupBaseY + Math.sin(this.elapsedTime * 2.6) * 0.04;
+    }
+
+    // 5. Apertura suave de la puerta de salida
+    if (this.roomAssets.exitDoorHandles) {
+      this.exitOpenCurrent = THREE.MathUtils.lerp(
+        this.exitOpenCurrent,
+        this.exitOpenTarget,
+        Math.min(1, deltaSeconds * 4.5)
+      );
+      const { leftWingPivot, rightWingPivot, openMode } =
+        this.roomAssets.exitDoorHandles;
+
+      if (openMode === 'swing') {
+        const angle = THREE.MathUtils.degToRad(85) * this.exitOpenCurrent;
+        leftWingPivot.rotation.y = -angle;
+        rightWingPivot.rotation.y = angle;
       } else {
-        const baseHalfOffset = 0.445;
-        const slideOffset = this.currentDoorOpen * 0.86;
-        doorRig.leftLeaf.position.x = -baseHalfOffset - slideOffset;
-        doorRig.rightLeaf.position.x = baseHalfOffset + slideOffset;
+        const baseOffset = 0.375;
+        const slideDistance = 0.78 * this.exitOpenCurrent;
+        leftWingPivot.position.x = -baseOffset - slideDistance;
+        rightWingPivot.position.x = baseOffset + slideDistance;
       }
     }
+
+    // 6. Iluminación atmosférica o parpadeo rojo de alerta crítica (<= 60s)
+    if (this.ambientLight && this.mainLight) {
+      if (this.isCriticalAlertActive) {
+        const pulse = (Math.sin(this.elapsedTime * 6.2) + 1) * 0.5;
+        const alertColor = new THREE.Color(0xd62828);
+        this.ambientLight.color
+          .copy(this.baseAmbientColor)
+          .lerp(alertColor, 0.35 + pulse * 0.45);
+        this.ambientLight.intensity =
+          this.baseAmbientIntensity * (0.85 + pulse * 0.45);
+        this.mainLight.color
+          .copy(this.baseMainLightColor)
+          .lerp(alertColor, 0.25 + pulse * 0.45);
+        this.mainLight.intensity =
+          this.baseMainLightIntensity * (0.7 + pulse * 0.45);
+      } else if (this.flickerEnabled) {
+        const jitter =
+          0.94 +
+          0.06 *
+            Math.sin(this.elapsedTime * 11.3) *
+            Math.cos(this.elapsedTime * 4.7);
+        this.mainLight.intensity = this.baseMainLightIntensity * jitter;
+      }
+    }
+  }
+
+  private setupPlayerFlashlight(): void {
+    const flashlight = new THREE.SpotLight(
+      0xfff6e5,
+      1.7,
+      11.5,
+      Math.PI / 5.5,
+      0.6,
+      1.4
+    );
+    flashlight.position.set(0, 0, 0);
+    const target = new THREE.Object3D();
+    target.position.set(0, 0, -1);
+    this.cameraController.camera.add(flashlight);
+    this.cameraController.camera.add(target);
+    flashlight.target = target;
+    this.scene.add(this.cameraController.camera);
+    this.flashlight = flashlight;
+  }
+
+  private setupRoomLights(room: Room): void {
+    const lighting = room.themeConfiguration.lightingConfig;
+    const isHorror = room.themeConfiguration.themeType === 'horror';
+
+    this.baseAmbientColor.setHex(lighting.ambientColor);
+    this.baseAmbientIntensity = lighting.ambientIntensity + 0.35;
+    this.baseMainLightColor.setHex(lighting.mainLightColor);
+    this.baseMainLightIntensity = lighting.mainLightIntensity * 8.5;
+    this.flickerEnabled = lighting.flickerEnabled;
+
+    this.ambientLight = new THREE.AmbientLight(
+      this.baseAmbientColor,
+      this.baseAmbientIntensity
+    );
+    this.scene.add(this.ambientLight);
+
+    this.hemiLight = new THREE.HemisphereLight(
+      lighting.mainLightColor,
+      lighting.ambientColor,
+      isHorror ? 0.35 : 0.55
+    );
+    this.hemiLight.position.set(0, room.dimensions.height, 0);
+    this.scene.add(this.hemiLight);
+
+    this.mainLight = new THREE.PointLight(
+      this.baseMainLightColor,
+      this.baseMainLightIntensity,
+      16,
+      1.6
+    );
+    this.mainLight.position.set(0, room.dimensions.height - 0.65, 0);
+    this.mainLight.castShadow = true;
+    this.mainLight.shadow.mapSize.set(1024, 1024);
+    this.mainLight.shadow.bias = -0.002;
+    this.scene.add(this.mainLight);
+
+    if (this.flashlight) {
+      this.flashlight.color.setHex(isHorror ? 0xffe4b8 : 0xd8f3ff);
+      this.flashlight.intensity = isHorror ? 2.4 : 1.5;
+    }
+  }
+
+  private clearCurrentRoomScene(): void {
+    this.raycastSelector.clearHighlight();
+
+    if (this.observedRoom) {
+      this.observedRoom.detach(this);
+      for (const puzzle of this.observedRoom.getAllPuzzles()) {
+        puzzle.detach(this);
+      }
+      this.observedRoom = null;
+    }
+
+    if (this.ambientLight) {
+      this.scene.remove(this.ambientLight);
+      this.ambientLight = null;
+    }
+    if (this.hemiLight) {
+      this.scene.remove(this.hemiLight);
+      this.hemiLight = null;
+    }
+    if (this.mainLight) {
+      this.scene.remove(this.mainLight);
+      this.mainLight = null;
+    }
+
+    if (this.roomAssets) {
+      this.scene.remove(this.roomAssets.rootGroup);
+      this.disposeGroupResources(this.roomAssets.rootGroup);
+      for (const tex of this.roomAssets.disposableTextures) {
+        tex.dispose();
+      }
+      this.roomAssets = null;
+    }
+  }
+
+  private disposeGroupResources(group: THREE.Group): void {
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) {
+        return;
+      }
+
+      child.geometry.dispose();
+      const materials = Array.isArray(child.material)
+        ? child.material
+        : [child.material];
+
+      for (const mat of materials) {
+        if (mat instanceof THREE.MeshStandardMaterial) {
+          mat.map?.dispose();
+          mat.emissiveMap?.dispose();
+        }
+        mat.dispose();
+      }
+    });
+  }
+
+  private handleResize(): void {
+    const width = Math.max(1, this.container.clientWidth);
+    const height = Math.max(1, this.container.clientHeight);
+    this.cameraController.setAspect(width / height);
+    this.renderer.setSize(width, height);
   }
 }

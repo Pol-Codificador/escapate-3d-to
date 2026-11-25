@@ -153,68 +153,62 @@ Implementar la **Fase 1** completa del proyecto **Escápate!!**: construir todo 
 3. Compilar con Vite (`npm run build`) o iniciar `npm run dev` y revisar en pantalla y consola del navegador el reporte del smoke test para `'horror'` y `'scifi'`.
 4. Revisar los diagramas UML renderizados en [`docs/ARCHITECTURE.md`](ARCHITECTURE.md).
 
-
 ---
 
-## Paso #03 — Patrón Command, Controlador MVC y Escena 3D FPS en Three.js (2026-11-24)
+## Paso #03 — Patrón Command, Controlador MVC y Escena 3D FPS con Three.js (2026-11-24)
 
 ### 1. Objetivo del paso
-Implementar la **Fase 2** completa del proyecto **Escápate!!**: construir el subsistema del patrón **Command** con historial observable y soporte de reversión (`undo()`), implementar el **Controlador MVC** (`GameController`) como único puente entre Vista y Modelo, generar texturas procedurales (`THREE.CanvasTexture`) y mobiliario 3D compuesto en **Three.js** para ambas temáticas (`horror` y `scifi`), habilitar la exploración FPS en primera persona con **Pointer Lock**, colisiones AABB con deslizamiento y **raycasting** central, y conectar una vista previa jugable en `src/main.ts`.
+Implementar la **Fase 2** completa de **Escápate!!**: construir el sistema de acciones encapsuladas bajo el **Patrón Command** (`CommandInvoker` observable + 5 comandos concretos), implementar el **Controlador MVC** (`GameController`) como único puente hacia el Modelo, generar texturas procedurales con `THREE.CanvasTexture` y muebles 3D compuestos para ambas temáticas (`horror` y `scifi`), habilitar exploración en primera persona con Pointer Lock, colisiones AABB y raycasting central (`SceneManager`, `CameraController`, `RaycastSelector`), e integrar una vista previa jugable en `src/main.ts`.
 
 ### 2. Archivos creados o modificados
 
 | Ruta | Clase / Interfaz Principal | Responsabilidad Exacta |
 | --- | --- | --- |
-| `src/controller/commands/CommandInvoker.ts` | `CommandInvoker`, `CommandHistorySnapshot`, `IReversibleCommand` | `Invoker` del patrón Command y `ConcreteSubject` Observer: ejecuta comandos, guarda historial cronológico con timestamp, soporta `undoLast()` y notifica cambios. |
-| `src/controller/commands/InspectObjectCommand.ts` | `InspectObjectCommand`, `InspectionPayload` | Comando concreto que inspecciona un `InteractiveObject` por ID y dispara la respuesta de lectura de nota, apertura de panel, teclado o pista. |
-| `src/controller/commands/ToggleSwitchCommand.ts` | `ToggleSwitchCommand` | Comando concreto que envía `'A' \| 'B' \| 'C'` al Acertijo 1 (`SequenceStrategy`) y revierte vía `undoLastStep()`/`popStep()` si el acertijo sigue sin resolverse. |
-| `src/controller/commands/InputCodeCommand.ts` | `InputCodeCommand` | Comando concreto que envía el código PIN de 4 dígitos al Acertijo 2 (`PinCodeStrategy`). |
-| `src/controller/commands/PickUpItemCommand.ts` | `PickUpItemCommand` | Comando concreto que recoge el ítem de recompensa (`bronze_key` / `access_card_lv5`), lo añade a `Inventory`, oculta `item_pickup` y permite revertirlo con `undo()`. |
-| `src/controller/commands/UseItemCommand.ts` | `UseItemCommand` | Comando concreto que utiliza el ítem seleccionado del inventario sobre la `ExitDoor` (Acertijo 3 `ItemUnlockStrategy`). |
-| `src/controller/GameController.ts` | `GameController` | Controlador MVC único entre Vista y Modelo: gestiona `CommandInvoker`, expone acciones del jugador (`startNewGame`, `restartCurrentGame`, `handleObjectInteraction`, `submitSwitch`, `submitPinCode`, `undoLastAction`) y ejecuta el loop `requestAnimationFrame`. |
-| `src/view/builders3d/ProceduralTextureFactory.ts` | `ProceduralTextureFactory` | Genera `THREE.CanvasTexture` en memoria para suelos, paredes, techos, notas/datapads, etiquetas `A/B/C`, teclado numérico y el código real (`4829` / `7391`) oculto/revelado en `clue_wall`. |
-| `src/view/builders3d/RoomMeshFactory.ts` | `RoomMeshFactory`, `BuiltRoom3D`, `ColliderBox` | Construye la habitación `10 × 4 × 10` m y los 6 muebles compuestos (`desk_note`, `switch_panel`, `clue_wall`, `safe`, `reward_item_pickup`, `exit_door`) con `MeshStandardMaterial`, sombras, rigs animables, `userData.interactiveObjectId` y colisionadores AABB. |
-| `src/view/scene/CameraController.ts` | `CameraController` | Cámara FPS (`1.65` m de altura) con Pointer Lock API (`WASD`/flechas, mouse con pitch `±80°`), `lock()`/`unlock()`/`isLocked()` y colisiones AABB con deslizamiento por ejes. |
-| `src/view/scene/RaycastSelector.ts` | `RaycastSelector` | Lanza un `THREE.Raycaster` desde `(0, 0)` con alcance de `3.5` m, aplica resaltado emisivo sutil al objeto apuntado y lo restaura al dejar de apuntar. |
-| `src/view/scene/SceneManager.ts` | `SceneManager` | Vista 3D y `ConcreteObserver` de `Room`, `Puzzle` y `GameTimer`: administra renderer (`PCFSoftShadowMap`, `ACESFilmicToneMapping`), linterna FPS, iluminación temática, animaciones (luz UV/holograma, apertura de caja fuerte y puerta) y parpadeo rojo crítico (`<= 60s`). |
-| `index.html`, `src/style.css`, `src/main.ts` | Vista previa jugable Fase 2 | Monta el canvas 3D FPS con mira (`+`), prompt inferior contextual, selector en vivo entre **Mansión de Terror** y **Nave Sci-Fi**, aviso de Pointer Lock y atajos (`E`/clic, `1/2/3`, `0-9`, `Z`, `R`). |
-| `docs/ARCHITECTURE.md` | Diagramas UML actualizados | Reemplaza el marcador `CommandInvoker_Fase2` por las clases reales implementadas en Controlador y Vista 3D. |
-| `docs/DEVLOG_DETALLADO.md` | Bitácora viva | Registra el presente Paso #03. |
+| `src/controller/commands/CommandInvoker.ts` | `CommandInvoker`, `CommandHistoryEntry`, `CommandHistorySnapshot` | Invoker del patrón Command y `ISubject` del patrón Observer: ejecuta comandos, guarda historial con hora `HH:MM:SS`, soporta `undoLast()` y notifica cambios en vivo. |
+| `src/controller/commands/InspectObjectCommand.ts` | `InspectObjectCommand`, `InspectionPayload` | Comando concreto para inspeccionar objetos interactivos por ID y emitir la respuesta adecuada (`read_note`, `open_switch_panel`, `open_pin_keypad`, `show_clue`). |
+| `src/controller/commands/ToggleSwitchCommand.ts` | `ToggleSwitchCommand` | Comando concreto que envía `'A' | 'B' | 'C'` al Acertijo 1 (`SequenceStrategy`) y revierte vía `undoLastStep()`/`popStep()` si el acertijo sigue abierto. |
+| `src/controller/commands/InputCodeCommand.ts` | `InputCodeCommand` | Comando concreto que valida un PIN numérico de 4 dígitos contra el Acertijo 2 (`PinCodeStrategy`). |
+| `src/controller/commands/PickUpItemCommand.ts` | `PickUpItemCommand` | Comando concreto reversible que recoge `bronze_key` o `access_card_lv5` al `Inventory`, oculta `item_pickup` y lo devuelve en `undo()`. |
+| `src/controller/commands/UseItemCommand.ts` | `UseItemCommand` | Comando concreto que aplica el ítem del inventario sobre `ExitDoor` (Acertijo 3 `ItemUnlockStrategy`). |
+| `src/controller/GameController.ts` | `GameController`, `HoverTargetInfo` | Controlador MVC único entre Vista y Modelo: gestiona `CommandInvoker`, ciclo `requestAnimationFrame` (`GameTimer.tick()` en `'playing'`), reinicio Prototype y despacho de interacciones. |
+| `src/view/builders3d/ProceduralTextureFactory.ts` | `ProceduralTextureFactory` | Genera `THREE.CanvasTexture` en memoria para pisos (madera vs hexágonos), paredes (victoriano vs titanio/advertencia), techos, notas legibles, pista UV/holográfica (`4829`/`7391`), placas `A/B/C` y teclado. |
+| `src/view/builders3d/RoomMeshFactory.ts` | `RoomMeshFactory`, `BuiltRoomSceneAssets`, `ColliderBox2D` | Construye la habitación `10 × 4 × 10` m y los 6 muebles compuestos en `THREE.Group` con sombras, `userData.interactiveObjectId`, pivotes animados y cajas AABB. |
+| `src/view/scene/CameraController.ts` | `CameraController` | Cámara FPS (`1.65` m), Pointer Lock API, `WASD` + flechas, pitch acotado `±80°` y colisiones AABB con deslizamiento independiente por ejes X/Z. |
+| `src/view/scene/RaycastSelector.ts` | `RaycastSelector`, `RaycastTargetHit` | Raycaster central de `3.5` m que identifica `interactiveObjectId`/`switchSymbol` y aplica/restaura resaltado emisivo sutil sobre materiales `MeshStandardMaterial`. |
+| `src/view/scene/SceneManager.ts` | `SceneManager` | Vista 3D y `ConcreteObserver` de `Puzzle`, `Room`, `GameTimer` y `GameManager`: gestiona `WebGLRenderer`, luces, linterna, animaciones de puerta/caja fuerte/UV y alerta roja crítica (`<= 60s`). |
+| `index.html`, `src/style.css`, `src/main.ts` | Vista previa jugable Fase 2 | Sustituye el smoke test por el canvas 3D real controlado por `GameController`, con mira `+`, prompt inferior, cambio en vivo Horror/Sci-Fi y aviso de Pointer Lock. |
+| `docs/ARCHITECTURE.md` | Diagramas UML actualizados | Reemplaza el marcador `CommandInvoker_Fase2` por las clases reales de `Controller` y `View` implementadas en Fase 2. |
+| `docs/DEVLOG_DETALLADO.md` | Bitácora viva | Registra el presente Paso #03 conforme a la Regla 4. |
 
 ### 3. Análisis de Patrones de Diseño
 
-1. **MVC Estricto (`src/model/`, `src/controller/`, `src/view/`):**
-   - *Por qué se eligió:* La Vista 3D (`SceneManager`, `RoomMeshFactory`, `CameraController`, `RaycastSelector`) nunca muta el Modelo ni conoce reglas de validación; únicamente lee geometría lógica, observa snapshots por `IObserver` y reporta `objectId` o entradas al `GameController`. Asimismo, `src/model/` permanece 100 % libre de `three`, `document` y `window`.
-2. **Command (`ICommand`, `CommandInvoker` y 5 comandos concretos):**
-   - *Roles:* `CommandInvoker` (`Invoker` + `ConcreteSubject`), `ICommand` (`Command`), `InspectObjectCommand` / `ToggleSwitchCommand` / `InputCodeCommand` / `PickUpItemCommand` / `UseItemCommand` (`ConcreteCommand`), y `Room` / `Puzzle` / `Inventory` (`Receiver`).
-   - *Por qué se eligió:* Desacopla las interacciones del jugador del Controlador, registra un historial cronológico observable (listo para el HUD de Fase 3) y habilita `undo()` real tanto para interruptores (`popStep()`) como para devolver ítems recogidos a la sala.
-3. **Observer (`SceneManager` y `CommandInvoker`):**
-   - *Roles:* `SceneManager` actúa como `ConcreteObserver` de `Puzzle`, `Room` y `GameTimer`; `CommandInvoker` actúa como `ConcreteSubject` emitiendo `CommandHistorySnapshot`.
-   - *Por qué se eligió:* Cuando `ToggleSwitchCommand` resuelve el Acertijo 1, `SequenceStrategy` no sabe nada de Three.js, pero `SceneManager` recibe el `PuzzleSnapshot` y enciende la luz UV/holograma y revela el código en `clue_wall` automáticamente. Lo mismo ocurre al abrir la caja fuerte, recoger/devolver el ítem, abrir la puerta de salida o entrar en los últimos `60s`.
-4. **Consumo de Abstract Factory, Builder y Prototype en la Vista:**
-   - *Por qué se eligió:* `RoomMeshFactory` y `ProceduralTextureFactory` consumen polimórficamente `room.themeConfiguration`, `SequenceStrategy.getExpectedSequence()` y `PinCodeStrategy.getExpectedPin()`. Al reiniciar vía `GameController.restartCurrentGame()`, `GameManager.restartGame()` clona `roomPrototype` y `SceneManager` reconstruye la escena 3D limpia.
+1. **Command (`CommandInvoker`, `InspectObjectCommand`, `ToggleSwitchCommand`, `InputCodeCommand`, `PickUpItemCommand`, `UseItemCommand`):**
+   - *Por qué se eligió:* Desacopla totalmente las entradas de la Vista (`E`, clic, teclado numérico, `Z`) de los receptores del Modelo (`Room`, `Puzzle`, `Inventory`), permite auditar cronológicamente cada acción del jugador y habilita `undoLast()` limpio en `ToggleSwitchCommand` y `PickUpItemCommand`.
+2. **Observer (`CommandInvoker` como Subject; `SceneManager` como ConcreteObserver):**
+   - *Por qué se eligió:* `SceneManager` no recibe llamadas imperativas desde los comandos para encender la luz UV, abrir la caja fuerte o pintar de rojo el cuarto en el último minuto; simplemente observa a `Puzzle`, `Room` y `GameTimer`. Asimismo, `CommandInvoker` ya emite `CommandHistorySnapshot` para alimentar el registro de investigación en vivo de la Fase 3.
+3. **MVC Estricto (`GameController`, `SceneManager`, `Room`):**
+   - *Por qué se eligió:* `src/view/` no importa ni muta reglas de negocio (`attempt`, `addItem`, `startGame`), mientras `src/model/` conserva 0 referencias a Three.js o al DOM. Toda escritura pasa por `GameController` $\rightarrow$ `CommandInvoker`.
+4. **Reutilización de Abstract Factory + Prototype en Vista 3D (`ProceduralTextureFactory`, `RoomMeshFactory`, `GameController.restartCurrentGame()`):**
+   - *Por qué se eligió:* Al alternar entre `'horror'` y `'scifi'` o reiniciar con `R`, `RoomMeshFactory` lee polimórficamente la paleta, iluminación y texto de `Room` (sin duplicar lógica), y `restartCurrentGame()` reconstruye la escena desde el clon limpio generado por `GameManager.restartGame()`.
 
 ### 4. Flujo técnico / Cómo interactúan las piezas
 
-1. `src/main.ts` instancia `SceneManager` sobre `#viewport-3d`, crea `GameController(sceneManager)` y llama a `controller.startNewGame('horror')` y `controller.startLoop()`.
-2. En cada frame `requestAnimationFrame`, `GameController` calcula `deltaSeconds`, actualiza `GameTimer` vía `gameManager.update(deltaSeconds)` (solo en `'playing'`) y llama a `sceneManager.updateFrame(deltaSeconds)`.
-3. `CameraController` mueve la cámara FPS respetando colisiones AABB con paredes y muebles, mientras `RaycastSelector` detecta el objeto apuntado a `<= 3.5` m y resalta sus materiales.
-4. Cuando el jugador presiona `E` o hace clic, `src/main.ts` invoca `controller.handleObjectInteraction(hovered.id)`. `GameController` instancia el `ICommand` adecuado y lo ejecuta en `CommandInvoker`.
-5. El comando modifica el Modelo (`Puzzle`, `Inventory`, `Room`), que notifica vía `Observer` a `AudioManager`, `ExitDoor`, `GameManager` y `SceneManager`, reflejando instantáneamente luces, puertas, visibilidad del ítem y animaciones 3D.
+1. `src/main.ts` instancia `SceneManager` y `GameController`, inicia `'horror'` (`controller.startNewGame('horror')`) y arranca `controller.startLoop()`.
+2. En cada `requestAnimationFrame`, `GameController` avanza `GameTimer.tick(deltaSeconds)` (solo en `'playing'`), actualiza `CameraController` + animaciones 3D en `SceneManager.renderFrame()` y consulta `RaycastSelector`.
+3. Al apuntar a un objeto a $\le 3.5$ m y pulsar `E` o clic, `main.ts` llama a `controller.handleObjectInteraction(id, switchSymbol)`.
+4. `GameController` crea el `ICommand` correspondiente y lo ejecuta mediante `CommandInvoker`. El comando opera sobre `Room`/`Puzzle`/`Inventory`, quienes notifican por Observer a `AudioManager`, `ExitDoor`, `GameManager` y `SceneManager`.
+5. `SceneManager` reacciona animando en tiempo real la luz UV/holográfica de `clue_wall` (`4829`/`7391`), la apertura de `safe` (`-105°`), la aparición/ocultamiento de `reward_item_pickup`, la apertura de `exit_door` y el parpadeo rojo si `GameTimer.isCritical()` es `true`.
 
 ### 5. Cómo probar o verificar este paso
 
-1. Ejecutar verificación estricta de tipos y build de producción:
+1. Ejecutar la verificación estricta de tipos y empaquetado de producción:
    ```bash
    npx tsc --noEmit
    npm run build
    ```
-   Ambos deben finalizar con código de salida `0`.
-2. Verificar la frontera MVC comprobando **0 coincidencias** de `three`, `document`, `window`, `HTMLElement`, `localStorage`, `AudioContext` o `setInterval` dentro de `src/model/` y `src/core/interfaces/`.
-3. Iniciar `npm run dev`, abrir la aplicación en el navegador y recorrer el flujo completo en **Mansión de Terror** y **Nave Sci-Fi**:
-   - Hacer clic para activar Pointer Lock y caminar con `WASD` comprobando colisiones suaves contra paredes, escritorio, caja fuerte y pedestal.
-   - Apuntar al escritorio (`note`) y pulsar `E` para leer la secuencia (`B → A → C` en Terror, `C → B → A` en Sci-Fi).
-   - Apuntar al panel de interruptores (`switch_panel`) y pulsar teclas `1/2/3` (`A/B/C`) y `Z` para verificar `ToggleSwitchCommand.undo()`. Al completar la secuencia, verificar que se enciende la luz UV/holograma en `clue_wall` revelando `4829` o `7391`.
-   - Apuntar a la caja fuerte (`safe`), teclear los 4 dígitos (`4829` o `7391`) y verificar la apertura animada de la puerta (`doorPivot`) y la aparición flotante de la llave/tarjeta.
-   - Apuntar al ítem (`E`), verificar que desaparece (y puede devolverse con `Z`), volver a recogerlo y usarlo con `E` sobre la puerta de salida (`exit_door`) para ver el indicador verde y la apertura de salida.
-   - Pulsar `R` para verificar el reinicio instantáneo vía `Prototype.clone()` y alternar el botón superior derecho entre ambas temáticas.
+   Ambos comandos deben finalizar con código `0`.
+2. Confirmar que `src/model/` y `src/core/interfaces/` mantienen **0 imports ni referencias en código** a `three`, `document`, `window`, `AudioContext` o `setInterval`.
+3. Ejecutar `npm run dev` y probar en el navegador:
+   - Hacer clic para capturar el cursor (Pointer Lock) y explorar con `WASD`/flechas verificando colisión con paredes, escritorio, caja fuerte y pedestal.
+   - Apuntar al escritorio (`desk_note`), panel (`switch_panel`, teclas `1/2/3` o clic y tecla `Z` para deshacer), pared (`clue_wall`), caja fuerte (`safe`, tecleando el PIN `4829` en Terror o `7391` en Sci-Fi), recoger la llave/tarjeta (`E`) y usarla en la puerta de salida (`E`).
+   - Probar el botón superior derecho **Cambiar a Nave Sci-Fi / Mansión de Terror** y la tecla `R` para reiniciar vía Prototype.

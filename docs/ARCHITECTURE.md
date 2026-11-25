@@ -40,9 +40,9 @@ El proyecto **Escápate!!** separa estrictamente su código en tres capas indepe
 
 ```mermaid
 flowchart TD
-    Player["Jugador (Teclado WASD / Raton / Click / E / Z)"] --> ViewInput["Vista FPS + HUD HTML/CSS (src/view/)"]
-    ViewInput -->|"Intencion de interaccion"| Controller["Controlador + Invoker (src/controller/)"]
-    Controller -->|"Crea y ejecuta"| Command["ICommand: execute() / undo()"]
+    Player["Jugador (WASD / Raton / Click / E / Z / R)"] --> ViewInput["Vista 3D FPS: SceneManager + CameraController + RaycastSelector"]
+    ViewInput -->|"Intencion de interaccion"| Controller["GameController + CommandInvoker (src/controller/)"]
+    Controller -->|"Crea y ejecuta"| Command["ICommand: InspectObject / ToggleSwitch / InputCode / PickUpItem / UseItem"]
     Command -->|"Opera sobre receptores"| ModelDomain["Modelo Puro (src/model/)"]
 
     subgraph ModelLayer["Capa Modelo — CERO Three.js y CERO DOM"]
@@ -60,8 +60,11 @@ flowchart TD
     Puzzle -->|"notify(PuzzleSnapshot)"| AudioManager
     Inventory["Inventory (Subject)"] -->|"notify(InventorySnapshot)"| AudioManager
 
-    GameManager -->|"notify(GameStateSnapshot)"| ViewRender["Vista 3D Three.js + HUD (IObserver)"]
-    Room -->|"Lectura de estado puro"| ViewRender
+    GameManager -->|"notify(GameStateSnapshot)"| ViewRender["SceneManager + RoomMeshFactory + ProceduralTextureFactory"]
+    Puzzle -->|"notify(PuzzleSnapshot)"| ViewRender
+    Room -->|"notify(RoomSnapshot)"| ViewRender
+    Timer -->|"notify(TimerSnapshot)"| ViewRender
+    CommandInvoker["CommandInvoker (Subject)"] -->|"notify(CommandHistorySnapshot)"| ViewRender
     AudioManager -->|"Web Audio API procedural"| SoundOut["Salida de Audio"]
 ```
 
@@ -241,16 +244,18 @@ classDiagram
         -commandInvoker: CommandInvoker
         +startNewGame(theme: ThemeType) Room
         +restartCurrentGame() Room
-        +handleObjectInteraction(objectId: string) void
-        +submitSwitch(symbol: string) ValidationResult
-        +submitPinCode(pin: string) ValidationResult
+        +handleObjectInteraction(objectId: string, switchSymbol?: SwitchSymbol) void
+        +submitSwitch(symbol: string) void
+        +submitPinCode(pin: string) void
         +undoLastAction() boolean
+        +startLoop() void
     }
 
     class SceneManager {
-        +buildRoomScene(room: Room, timer?: GameTimer) void
-        +update(data: SceneObservableSnapshot) void
-        +updateFrame(deltaSeconds: number) InteractiveObject
+        +bindTimer(timer: GameTimer) void
+        +buildRoomScene(room: Room) void
+        +update(data: SceneObservedSnapshot) void
+        +renderFrame(deltaSeconds: number) RaycastTargetHit
     }
 
     IPuzzleValidationStrategy <|.. SequenceStrategy
@@ -422,8 +427,8 @@ classDiagram
 
 | Categoría | Patrón | Clases / Contratos Concretos | Problema de Diseño que Resuelve |
 | --- | --- | --- | --- |
-| **Arquitectónico** | **MVC** | Modelo (`src/model/`), Vista (`src/view/`), Controlador (`src/controller/`) | Aísla al 100 % las reglas de dominio de Three.js y del DOM para poder probar, clonar y evolucionar cada capa sin acoplamientos. |
-| **Comportamental** | **Observer** | `ISubject<T>`, `IObserver<T>`, `GameTimer`, `Inventory`, `Puzzle`, `Room`, `ExitDoor`, `GameManager`, `AudioManager` | Desacopla la emisión de cambios de estado del Modelo de los múltiples consumidores reactivos (puerta, audio, sala, HUD). |
+| **Arquitectónico** | **MVC** | Modelo (`src/model/`), Vista (`SceneManager`, `CameraController`, `RaycastSelector`, `RoomMeshFactory`, `ProceduralTextureFactory`), Controlador (`GameController`) | Aísla al 100 % las reglas de dominio de Three.js y del DOM para poder probar, clonar y evolucionar cada capa sin acoplamientos. |
+| **Comportamental** | **Observer** | `ISubject<T>`, `IObserver<T>`, `GameTimer`, `Inventory`, `Puzzle`, `Room`, `CommandInvoker`, `ExitDoor`, `GameManager`, `AudioManager`, `SceneManager` | Desacopla la emisión de cambios de estado del Modelo e Invoker de los múltiples consumidores reactivos (puerta, audio, sala, escena 3D, HUD). |
 | **Comportamental** | **Strategy** | `IPuzzleValidationStrategy`, `Puzzle` (Context), `SequenceStrategy`, `PinCodeStrategy`, `ItemUnlockStrategy` | Permite validar secuencias con `popStep()`, PIN de 4 dígitos o uso de ítems sin condicionales rígidos ni herencia explosiva en `Puzzle`. |
 | **Comportamental** | **Command** | `ICommand`, `CommandInvoker`, `InspectObjectCommand`, `ToggleSwitchCommand`, `InputCodeCommand`, `PickUpItemCommand`, `UseItemCommand` | Encapsula acciones del jugador como objetos autónomos con historial cronológico observable y soporte nativo de reversión (`undo()`). |
 | **Creacional** | **Abstract Factory** | `IThemeFactory`, `HorrorThemeFactory`, `SciFiThemeFactory` | Garantiza familias coherentes de colores, luces, narrativa, audio y acertijos por temática sin `if/switch` en `RoomDirector`. |
